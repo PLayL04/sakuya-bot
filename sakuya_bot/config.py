@@ -25,6 +25,8 @@ if not ADMIN_ROLE_IDS:
     raise SystemExit("ADMIN_ROLE_ID в .env пустой — укажите хотя бы одну роль")
 # каналы, где работает !кофе (через запятую); пусто — во всех каналах
 COFFEE_CHANNEL_IDS = parse_ids(os.getenv("COFFEE_CHANNEL_ID", ""))
+# каналы для !пиво; если не заданы — те же, что для !кофе
+BEER_CHANNEL_IDS = parse_ids(os.getenv("BEER_CHANNEL_ID", "")) or COFFEE_CHANNEL_IDS
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Moscow"))
 
 BASE_DIR = Path(__file__).parent.parent

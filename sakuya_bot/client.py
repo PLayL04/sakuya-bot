@@ -4,11 +4,16 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
+from .beer.cog import BeerCog
 from .coffee.cog import CoffeeCog
 from .config import ADMIN_ROLE_IDS, GUILD, GUILD_ID
 from .logs import log, who
 from .reactions.cog import ReactionCog
 from .schedules.cog import ScheduleCog
+
+
+# что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
+COOLDOWN_TEXT = {"кофе": "Кофе ещё варится ☕", "пиво": "Пиво ещё наливается 🍺"}
 
 
 class SakuyaBot(commands.Bot):
@@ -26,6 +31,7 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(self.schedule_cog, guild=GUILD)
         await self.add_cog(self.reaction_cog, guild=GUILD)
         await self.add_cog(CoffeeCog(self))
+        await self.add_cog(BeerCog(self))
         # синхронизация только для своего сервера — команды появляются сразу
         synced = await self.tree.sync(guild=GUILD)
         log.info("Слэш-команды синхронизированы с сервером %s: %s", GUILD_ID, ", ".join(f"/{c.name}" for c in synced))
@@ -61,13 +67,14 @@ class SakuyaBot(commands.Bot):
         if isinstance(error, commands.CommandNotFound):
             return  # обычное сообщение, начинающееся с «!»
         if isinstance(error, commands.CommandOnCooldown):
-            await ctx.reply(f"Кофе ещё варится ☕ Попробуй через {error.retry_after:.0f} сек.", mention_author=False, delete_after=10)
+            waiting = COOLDOWN_TEXT.get(ctx.command.name, "Подожди немного ⏳")
+            await ctx.reply(f"{waiting} Попробуй через {error.retry_after:.0f} сек.", mention_author=False, delete_after=10)
             return
         if isinstance(error, commands.CheckFailure):
             return  # личные сообщения или канал, где команда не разрешена — молча игнорируем
         log.error("Ошибка команды !%s от %s: %s", ctx.command, who(ctx.author), error,
                   exc_info=getattr(error, "original", error))
-        await ctx.reply("Что-то пошло не так, не получилось сварить кофе.", mention_author=False)
+        await ctx.reply("Что-то пошло не так, попробуй ещё раз позже.", mention_author=False)
 
     @tasks.loop(hours=1)
     async def heartbeat(self):

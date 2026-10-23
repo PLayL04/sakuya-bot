@@ -1,71 +1,17 @@
 """Латте-арт: вставляет картинку в шаблон чашки и стилизует её под рисунок пенкой на эспрессо."""
 
-import io
-from functools import lru_cache
-
 import numpy as np
-from PIL import Image, ImageFilter, ImageOps, UnidentifiedImageError
+from PIL import Image, ImageFilter, ImageOps
 
 from ..config import TEMPLATE_DIR
+from ..imaging.template import blur, load_template, open_image, to_float, to_png
 
 TEMPLATE_FILE = TEMPLATE_DIR / "coffee.png"
-MAX_PIXELS = 40_000_000  # защита от гигантских картинок
 
 # цвета кофе: тёмные места картинки — эспрессо, средние — крема, светлые — молочная пена
 ESPRESSO = np.array([43, 23, 12], dtype=np.float32)
 CREMA = np.array([138, 90, 51], dtype=np.float32)
 FOAM = np.array([242, 228, 204], dtype=np.float32)
-
-
-def to_float(img: Image.Image) -> np.ndarray:
-    return np.asarray(img, dtype=np.float32) / 255
-
-
-def blur(arr: np.ndarray, radius: float) -> np.ndarray:
-    img = Image.fromarray((np.clip(arr, 0, 1) * 255).astype(np.uint8))
-    return to_float(img.filter(ImageFilter.GaussianBlur(radius)))
-
-
-@lru_cache(maxsize=1)
-def load_template() -> tuple[np.ndarray, np.ndarray, tuple[int, int, int, int]]:
-    """Возвращает (RGB шаблона 0..255, маска выреза 0..1, рамка выреза)."""
-    img = Image.open(TEMPLATE_FILE)
-    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-        # шаблон с прозрачностью: вырез — прозрачные пиксели
-        rgba = np.asarray(img.convert("RGBA"), dtype=np.float32)
-        rgb, mask = rgba[..., :3].copy(), 1 - rgba[..., 3] / 255
-    else:
-        # шаблон с зелёным фоном: хромакей с мягким краем
-        rgb = np.asarray(img.convert("RGB"), dtype=np.float32).copy()
-        r, g, b = rgb[..., 0], rgb[..., 1], rgb[..., 2]
-        mask = np.clip((g - np.maximum(r, b) - 15) / 45, 0, 1)
-        # убираем зелёный ореол вокруг выреза (только рядом с ним, чтобы не трогать остальной шаблон)
-        near = to_float(Image.fromarray((mask > 0).astype(np.uint8) * 255).filter(ImageFilter.MaxFilter(7))) > 0
-        rgb[..., 1] = np.where(near, np.minimum(g, (r + b) / 2), g)
-        # расширяем вырез на 1 px: кофе закрывает смешанные с зелёным пиксели у ободка
-        mask = to_float(Image.fromarray((mask * 255).astype(np.uint8)).filter(ImageFilter.MaxFilter(3)))
-    mask = blur(mask, 1)
-    bbox = Image.fromarray((mask > 0.5).astype(np.uint8) * 255).getbbox()
-    if not bbox:
-        raise RuntimeError(f"В шаблоне {TEMPLATE_FILE} не найден вырез (зелёный фон или прозрачность)")
-    return rgb, mask, bbox
-
-
-def open_image(data: bytes) -> Image.Image:
-    try:
-        img = Image.open(io.BytesIO(data))
-        if img.width * img.height > MAX_PIXELS:
-            raise ValueError("Картинка слишком большая")
-        img.seek(0)  # у GIF берём первый кадр
-        img = ImageOps.exif_transpose(img)
-        img.load()
-    except (UnidentifiedImageError, Image.DecompressionBombError, OSError, EOFError) as e:
-        raise ValueError("Не удалось открыть картинку") from e
-    # прозрачный фон (стикеры, PNG) становится эспрессо
-    if img.mode in ("RGBA", "LA", "PA") or "transparency" in img.info:
-        img = img.convert("RGBA")
-        img = Image.alpha_composite(Image.new("RGBA", img.size, (0, 0, 0, 255)), img)
-    return img.convert("RGB")
 
 
 def latte_colors(src: Image.Image, size: tuple[int, int]) -> np.ndarray:
@@ -97,7 +43,7 @@ def latte_colors(src: Image.Image, size: tuple[int, int]) -> np.ndarray:
 
 def make_latte(data: bytes) -> bytes:
     """Принимает байты картинки, возвращает PNG с латте-артом в чашке."""
-    template, mask, (x0, y0, x1, y1) = load_template()
+    template, mask, (x0, y0, x1, y1) = load_template(TEMPLATE_FILE)
     coffee = template.copy()
     coffee[y0:y1, x0:x1] = latte_colors(open_image(data), (x1 - x0, y1 - y0))
 
@@ -106,6 +52,4 @@ def make_latte(data: bytes) -> bytes:
     coffee *= (1 - 0.6 * shadow)[..., None]
 
     out = template * (1 - mask[..., None]) + coffee * mask[..., None]
-    buf = io.BytesIO()
-    Image.fromarray(np.clip(out, 0, 255).astype(np.uint8)).save(buf, "PNG", optimize=True)
-    return buf.getvalue()
+    return to_png(out)
