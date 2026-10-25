@@ -1,4 +1,4 @@
-"""Откуда взять картинку для !кофе: поиск в сообщениях и скачивание."""
+"""Откуда взять картинку для !кофе и !пиво: поиск в сообщениях (картинки, гифки, видео, стикеры) и скачивание."""
 
 from pathlib import Path
 
@@ -8,16 +8,21 @@ from discord.ext import commands
 
 from ..config import IMG_EXTENSIONS
 
-MAX_IMAGE_BYTES = 10 * 1024 * 1024
+MAX_IMAGE_BYTES = 25 * 1024 * 1024  # гифки и видео бывают тяжёлыми; из видео всё равно берётся только начало
+VIDEO_EXTENSIONS = {".mp4", ".webm", ".mov", ".m4v"}
 HISTORY_LIMIT = 50  # сколько сообщений выше просматривать в поисках картинки
 
 
 def image_in_message(message: discord.Message) -> discord.Attachment | str | None:
-    """Вложение-картинка или ссылка на картинку (embed, стикер) из сообщения."""
+    """Вложение (картинка, гифка, видео) или ссылка на картинку (embed, стикер) из сообщения."""
     for a in message.attachments:
-        if (a.content_type or "").startswith("image/") or Path(a.filename).suffix.lower() in IMG_EXTENSIONS:
+        kind = (a.content_type or "").split("/")[0]
+        if kind in ("image", "video") or Path(a.filename).suffix.lower() in IMG_EXTENSIONS | VIDEO_EXTENSIONS:
             return a
     for embed in message.embeds:
+        # гифки из Tenor и Giphy приходят как embed «gifv»: настоящая анимация в нём — mp4-видео, а не превью-картинка
+        if embed.type == "gifv" and embed.video and (embed.video.proxy_url or embed.video.url):
+            return embed.video.proxy_url or embed.video.url
         for part in (embed.image, embed.thumbnail):
             if part and (part.proxy_url or part.url):
                 return part.proxy_url or part.url
@@ -31,19 +36,19 @@ def image_in_message(message: discord.Message) -> discord.Attachment | str | Non
 async def download_image(source: discord.Attachment | str) -> bytes:
     if isinstance(source, discord.Attachment):
         if source.size > MAX_IMAGE_BYTES:
-            raise ValueError("Картинка больше 10 МБ")
+            raise ValueError(f"Файл больше {MAX_IMAGE_BYTES // 1024 // 1024} МБ")
         return await source.read()
-    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=10)) as session:
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=20)) as session:
         async with session.get(source) as resp:
             resp.raise_for_status()
             if (resp.content_length or 0) > MAX_IMAGE_BYTES:
-                raise ValueError("Картинка больше 10 МБ")
+                raise ValueError(f"Файл больше {MAX_IMAGE_BYTES // 1024 // 1024} МБ")
             # читаем по кускам до конца файла: resp.content.read(n) отдаёт только то, что уже пришло, и обрезает картинку
             data = bytearray()
             async for chunk in resp.content.iter_chunked(64 * 1024):
                 data += chunk
                 if len(data) > MAX_IMAGE_BYTES:
-                    raise ValueError("Картинка больше 10 МБ")
+                    raise ValueError(f"Файл больше {MAX_IMAGE_BYTES // 1024 // 1024} МБ")
     return bytes(data)
 
 

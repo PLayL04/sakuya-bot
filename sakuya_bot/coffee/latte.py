@@ -4,7 +4,8 @@ import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
 from ..config import TEMPLATE_DIR
-from ..imaging.template import blur, load_template, open_image, to_float, to_png
+from ..imaging.effect import ImageEffect
+from ..imaging.template import Template, blur, load_template, open_image, to_float, to_png
 
 TEMPLATE_FILE = TEMPLATE_DIR / "coffee.png"
 
@@ -41,15 +42,24 @@ def latte_colors(src: Image.Image, size: tuple[int, int]) -> np.ndarray:
     return rgb
 
 
-def make_latte(data: bytes) -> bytes:
-    """Принимает байты картинки, возвращает PNG с латте-артом в чашке."""
-    template, mask, (x0, y0, x1, y1) = load_template(TEMPLATE_FILE)
-    coffee = template.copy()
-    coffee[y0:y1, x0:x1] = latte_colors(open_image(data), (x1 - x0, y1 - y0))
+def render(src: Image.Image, template: Template) -> np.ndarray:
+    """Один кадр: картинка (RGB) как латте-арт в чашке. Возвращает RGB 0..255 размером с шаблон."""
+    x0, y0, x1, y1 = template.bbox
+    coffee = template.rgb.copy()
+    coffee[y0:y1, x0:x1] = latte_colors(src, (x1 - x0, y1 - y0))
 
     # тень от стенок чашки на поверхности кофе
-    shadow = blur(1 - mask, 8) * mask
+    shadow = blur(1 - template.mask, 8 * template.scale) * template.mask
     coffee *= (1 - 0.6 * shadow)[..., None]
 
-    out = template * (1 - mask[..., None]) + coffee * mask[..., None]
-    return to_png(out)
+    # вставка в вырез; если в настройках шаблона включён "shading" — с освещением из шаблона
+    return template.composite(coffee)
+
+
+def make_latte(data: bytes) -> bytes:
+    """Принимает байты картинки, возвращает PNG с латте-артом в чашке."""
+    return to_png(render(open_image(data), load_template(TEMPLATE_FILE)))
+
+
+# описание эффекта для команды: картинка -> PNG, анимация и видео -> GIF (imaging/effect.py)
+EFFECT = ImageEffect("кофе", TEMPLATE_FILE, render, keep_alpha=False, encode_still=to_png, still_name="coffee.png")

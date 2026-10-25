@@ -1,0 +1,9 @@
+{
+  "key": "hue",
+  "shading": 1.0,
+  "beer": {
+    "walls": "straight",
+    "bubbles": false,
+    "glass": false
+  }
+}

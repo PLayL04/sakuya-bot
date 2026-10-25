@@ -13,12 +13,12 @@ class CoffeeCog(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        await preload_template(latte.TEMPLATE_FILE, "кофе", FUN_CHANNEL_IDS)
+        await preload_template(latte.EFFECT, FUN_CHANNEL_IDS)
 
     @commands.command(name="кофе", aliases=["coffee", "латте"])
     @commands.guild_only()
     @commands.check(lambda ctx: channel_allowed(ctx.channel, FUN_CHANNEL_IDS))  # проверки идут до кулдауна, так что он не тратится
     @commands.cooldown(1, 15, commands.BucketType.user)
     async def coffee(self, ctx: commands.Context):
-        """Рисует картинку пенкой на кофе: из ответа, из вложения или последнюю выше в канале."""
-        await reply_with_effect(ctx, latte.make_latte, "coffee.png")
+        """Рисует картинку пенкой на кофе: из ответа, из вложения или последнюю выше в канале. Гифки и видео — анимацией."""
+        await reply_with_effect(ctx, latte.EFFECT)
