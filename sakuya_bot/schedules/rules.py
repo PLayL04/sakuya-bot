@@ -11,7 +11,7 @@ from datetime import date, datetime, time, timedelta
 TIME_RE = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 DATE_RE = re.compile(r"^(\d{1,2})\.(\d{1,2})(?:\.(\d{4}))?$")
 
-WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+WEEKDAYS = ["Понедельник", "Вторник", "Среда", "Четверг", "Пятница", "Суббота", "Воскресенье"]  # для выбора в /schedule
 # для фразы «каждый понедельник», «каждую среду», «каждое воскресенье»
 WEEKDAYS_EVERY = [
     "каждый понедельник", "каждый вторник", "каждую среду", "каждый четверг",

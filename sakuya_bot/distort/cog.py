@@ -15,13 +15,13 @@ class DistortCog(commands.Cog):
         await preload_template(effect.EXPLODE_EFFECT)
         await preload_template(effect.IMPLODE_EFFECT)
 
-    @commands.command(name="explode")
+    @commands.command(name="explode", aliases=["взрыв"])
     @fun_command_checks  # только на сервере, в каналах и с кулдауном из настроек (/settings)
     async def explode(self, ctx: commands.Context):
         """Раздувает картинку от центра («рыбий глаз»): из ответа, из вложения или последнюю выше в канале. Гифки и видео — анимацией."""
         await reply_with_effect(ctx, effect.EXPLODE_EFFECT)
 
-    @commands.command(name="implode")
+    @commands.command(name="implode", aliases=["сжатие"])
     @fun_command_checks  # только на сервере, в каналах и с кулдауном из настроек (/settings)
     async def implode(self, ctx: commands.Context):
         """Вдавливает картинку к центру: из ответа, из вложения или последнюю выше в канале. Гифки и видео — анимацией."""

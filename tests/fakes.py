@@ -44,6 +44,7 @@ class FakeInteraction:
     def __init__(self, user=None, guild=None):
         self.user = user or member(manage=True)
         self.guild = guild or fake_guild()
+        self.channel = FakeChannel(5)
         self.client = mock.Mock()
         self.client.user.name = "Sakuya"
         self.type = discord.InteractionType.application_command
@@ -169,3 +170,18 @@ async def call(command, cog, interaction=None, **params) -> FakeInteraction:
     interaction = interaction or FakeInteraction()
     await command.callback(cog, interaction, **params)
     return interaction
+
+
+def image_attachment(data: bytes, name="pic.png", content_type="image/png"):
+    """Настоящее (для isinstance) вложение Discord с картинкой — как в сообщении, по которому нажали ПКМ."""
+    a = mock.MagicMock(spec=discord.Attachment)
+    a.filename, a.content_type, a.size, a.url = name, content_type, len(data), f"https://cdn/{name}"
+    a.read = mock.AsyncMock(return_value=data)
+    return a
+
+
+def message_with(*attachments, message_id=42):
+    msg = mock.MagicMock(spec=discord.Message)
+    msg.id = message_id
+    msg.attachments, msg.embeds, msg.stickers = list(attachments), [], []
+    return msg

@@ -2,6 +2,7 @@
 
 Тесты не подключаются к Discord и не трогают настоящие data/, img/ и logs/ проекта."""
 
+import asyncio
 import os
 
 # до импорта бота: config.py требует токен и ID сервера, а старые ключи .env не должны попасть в тесты
@@ -76,7 +77,17 @@ def bot(channels):
     b.fetch_channel = mock.AsyncMock(side_effect=discord.NotFound(mock.Mock(status=404, reason="Not Found"), "нет канала"))
     b.get_emoji = lambda emoji_id: object() if emoji_id < 900_000_000_000_000_000 else None  # «чужие» эмодзи — с ID от 9…
     yield b
-    for cog in (b.schedule_cog, b.reaction_cog):  # циклы, запущенные setup_hook, не должны пережить тест
-        if hasattr(cog, "scheduler"):
-            cog.scheduler.cancel()
+    # циклы, запущенные setup_hook, не должны пережить тест
+    b.schedule_cog.scheduler.cancel()
+    if settings_cog := b.get_cog("SettingsCog"):
+        settings_cog.watch_file.cancel()
     b.heartbeat.cancel()
+
+
+@pytest.fixture
+async def started(bot):
+    """Бот после setup_hook: все коги, команды и меню загружены (синхронизация с Discord подменена)."""
+    bot.wait_until_ready = asyncio.Event().wait  # фоновые циклы ждут подключения к Discord, которого в тестах нет
+    with mock.patch.object(bot.tree, "sync", mock.AsyncMock(return_value=[])):
+        await bot.setup_hook()
+    return bot

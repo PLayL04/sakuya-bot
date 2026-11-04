@@ -12,26 +12,28 @@ from sakuya_bot.imaging.command import channel_allowed, fun_cooldown, in_fun_cha
 from fakes import FakeInteraction
 
 
-@pytest.fixture
-async def started(bot):
-    with mock.patch.object(bot.tree, "sync", mock.AsyncMock(return_value=[])):
-        await bot.setup_hook()
-    return bot
-
-
 async def test_commands_are_registered(started):
-    payload = {c.name: c.to_dict(started.tree) for c in started.tree.get_commands(guild=GUILD)}
-    assert set(payload) == {"settings", "schedule", "reaction"}
+    slash = {c.name: c.to_dict(started.tree) for c in started.tree.get_commands(guild=GUILD, type=discord.AppCommandType.chat_input)}
+    assert set(slash) == {"settings", "schedule", "reaction", "help"}
     # команды видны всем, доступ проверяет бот (admin_roles или «Управлять сервером»)
-    assert all(p.get("default_member_permissions") is None for p in payload.values())
+    assert all(p.get("default_member_permissions") is None for p in slash.values())
     # Discord отклонит описание длиннее 100 символов — проверяем всё, вместе с параметрами
-    for command in payload.values():
-        for sub in command["options"]:
+    for command in slash.values():
+        assert len(command["description"]) <= 100
+        for sub in command.get("options", []):
             assert len(sub["description"]) <= 100, sub["name"]
             for option in sub.get("options", []):
                 assert len(option["description"]) <= 100, f"{sub['name']} {option['name']}"
+    menus = [c.name for c in started.tree.get_commands(guild=GUILD, type=discord.AppCommandType.message)]
+    assert menus == ["Кофе", "Пиво", "Музей", "Взрыв", "Сжатие"]  # Discord разрешает не больше 5
     prefix = {c.name for c in started.commands}
-    assert {"кофе", "пиво", "explode", "implode", "музей", "цитата"} <= prefix
+    assert {"кофе", "пиво", "explode", "implode", "музей", "цитата", "помощь"} == prefix
+
+
+@pytest.mark.parametrize("alias, name", [("взрыв", "explode"), ("сжатие", "implode"), ("латте", "кофе"),
+                                         ("help", "помощь"), ("quote", "цитата")])
+async def test_aliases(started, alias, name):
+    assert started.get_command(alias).name == name
 
 
 async def test_unexpected_error_is_answered(bot):

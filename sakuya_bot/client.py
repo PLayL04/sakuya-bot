@@ -8,7 +8,10 @@ from .beer.cog import BeerCog
 from .coffee.cog import CoffeeCog
 from .config import GUILD, GUILD_ID
 from .distort.cog import DistortCog
+from .help import HelpCog
+from .imaging.command import COOLDOWN_TEXT
 from .logs import log, who
+from .menus import MenuCog
 from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
 from .reactions.cog import ReactionCog
@@ -17,13 +20,6 @@ from .schedules.cog import ScheduleCog
 from .settings import current
 from .settings.cog import SettingsCog
 from .storage import remove_unused_images
-
-
-# что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
-COOLDOWN_TEXT = {"кофе": "Кофе ещё варится ☕", "пиво": "Пиво ещё наливается 🍺",
-                 "explode": "Картинка ещё раздувается 💥", "implode": "Картинка ещё сжимается 🌀",
-                 "цитата": "Цитата ещё подбирается 📖",
-                 "музей": "Картину ещё вешают 🖼️"}
 
 
 class SakuyaBot(commands.Bot):
@@ -47,6 +43,9 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(DistortCog(self))
         await self.add_cog(MuseumCog(self))
         await self.add_cog(QuoteCog(self))
+        # после команд с картинками: меню берёт их кулдауны, а /help — их алиасы
+        await self.add_cog(MenuCog(self))
+        await self.add_cog(HelpCog(self), guild=GUILD)
         # синхронизация только для своего сервера — команды появляются сразу
         synced = await self.tree.sync(guild=GUILD)
         log.info("Слэш-команды синхронизированы с сервером %s: %s", GUILD_ID, ", ".join(f"/{c.name}" for c in synced))
