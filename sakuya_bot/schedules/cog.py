@@ -2,24 +2,18 @@
 
 import uuid
 from datetime import datetime
-from pathlib import Path
 
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
 from ..checks import AdminOnly
-from ..config import DATA_DIR, IMG_DIR, IMG_EXTENSIONS, TZ
+from ..config import DATA_DIR, IMG_DIR, TZ
 from ..logs import log, who
-from ..storage import load_json, save_json
+from ..storage import is_image, list_images, load_json, save_image, save_json
 from .rules import DATE_RE, TIME_RE, WEEKDAYS, describe_schedule, is_due_today
 
 SCHEDULES_FILE = DATA_DIR / "schedules.json"
-
-
-def list_images() -> list[str]:
-    IMG_DIR.mkdir(exist_ok=True)
-    return sorted(p.name for p in IMG_DIR.iterdir() if p.suffix.lower() in IMG_EXTENSIONS)
 
 
 @app_commands.guild_only()
@@ -108,15 +102,10 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             return
 
         if image:
-            ext = Path(image.filename).suffix.lower()
-            if ext not in IMG_EXTENSIONS:
+            if not is_image(image):
                 await interaction.response.send_message("Это не картинка.", ephemeral=True)
                 return
-            # ссылки на вложения Discord со временем протухают, поэтому сохраняем файл локально
-            file = f"{Path(image.filename).stem}-{uuid.uuid4().hex[:6]}{ext}"
-            IMG_DIR.mkdir(exist_ok=True)
-            await image.save(IMG_DIR / file)
-            log.info("Сохранена картинка %s (%d КБ)", file, image.size // 1024)
+            file = await save_image(image)
         elif file:
             if file not in list_images():
                 await interaction.response.send_message(f"Файл `{file}` не найден в папке img.", ephemeral=True)
