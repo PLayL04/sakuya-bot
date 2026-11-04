@@ -9,6 +9,7 @@ from .coffee.cog import CoffeeCog
 from .config import ADMIN_ROLE_IDS, GUILD, GUILD_ID
 from .distort.cog import DistortCog
 from .logs import log, who
+from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
 from .reactions.cog import ReactionCog
 from .schedules.cog import ScheduleCog
@@ -17,7 +18,8 @@ from .schedules.cog import ScheduleCog
 # что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
 COOLDOWN_TEXT = {"кофе": "Кофе ещё варится ☕", "пиво": "Пиво ещё наливается 🍺",
                  "explode": "Картинка ещё раздувается 💥", "implode": "Картинка ещё сжимается 🌀",
-                 "цитата": "Цитата ещё подбирается 📖"}
+                 "цитата": "Цитата ещё подбирается 📖",
+                 "музей": "Картину ещё вешают 🖼️"}
 
 
 class SakuyaBot(commands.Bot):
@@ -37,6 +39,7 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(CoffeeCog(self))
         await self.add_cog(BeerCog(self))
         await self.add_cog(DistortCog(self))
+        await self.add_cog(MuseumCog(self))
         await self.add_cog(QuoteCog(self))
         # синхронизация только для своего сервера — команды появляются сразу
         synced = await self.tree.sync(guild=GUILD)

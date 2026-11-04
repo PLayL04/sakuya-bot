@@ -23,7 +23,7 @@ GUILD = discord.Object(id=GUILD_ID)
 ADMIN_ROLE_IDS = parse_ids(os.environ["ADMIN_ROLE_ID"])
 if not ADMIN_ROLE_IDS:
     raise SystemExit("ADMIN_ROLE_ID в .env пустой — укажите хотя бы одну роль")
-# каналы для развлекательных команд (!кофе, !пиво, !explode, !implode, !цитата) через запятую; пусто — во всех каналах
+# каналы для развлекательных команд (!кофе, !пиво, !explode, !implode, !музей, !цитата) через запятую; пусто — во всех каналах
 FUN_CHANNEL_IDS = parse_ids(os.getenv("FUN_CHANNEL_ID", ""))
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Moscow"))
 
