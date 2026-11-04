@@ -16,7 +16,7 @@ from fakes import FakeInteraction
 
 async def test_commands_are_registered(started):
     slash = {c.name: c.to_dict(started.tree) for c in started.tree.get_commands(guild=GUILD, type=discord.AppCommandType.chat_input)}
-    assert set(slash) == {"settings", "schedule", "reaction", "help"}
+    assert set(slash) == {"settings", "schedule", "reaction", "quotes", "help"}
     # команды видны всем, доступ проверяет бот (admin_roles или «Управлять сервером»)
     assert all(p.get("default_member_permissions") is None for p in slash.values())
     # Discord отклонит описание длиннее 100 символов — проверяем всё, вместе с параметрами

@@ -106,7 +106,11 @@ def parse_text(text: str) -> tuple[str | None, list[list[str]]]:
 
 def read_text(path: Path) -> str:
     """UTF-8 (с BOM или без), а если не читается — cp1251, как сохраняет Блокнот в старых Windows."""
-    data = path.read_bytes()
+    return decode(path.read_bytes())
+
+
+def decode(data: bytes) -> str:
+    """UTF-8 (с BOM или без), а если не читается — cp1251."""
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -125,15 +129,22 @@ class QuoteLibrary:
         self.folder = folder
         self._cache: dict[Path, tuple[float, QuoteSource]] = {}
 
-    def sources(self) -> list[QuoteSource]:
+    def files(self) -> list[tuple[Path, QuoteSource]]:
+        """Все *.txt папки по имени, вместе с разобранным текстом (в том числе файлы, где цитат не нашлось)."""
         paths = sorted(self.folder.glob("*.txt")) if self.folder.is_dir() else []
         fresh = {}
         for path in paths:
-            mtime = path.stat().st_mtime
+            try:
+                mtime = path.stat().st_mtime
+            except FileNotFoundError:
+                continue  # файл удалили прямо сейчас
             cached = self._cache.get(path)
             fresh[path] = cached if cached and cached[0] == mtime else (mtime, load_source(path))
         self._cache = fresh
-        return [source for _, source in fresh.values() if source.paragraphs]
+        return [(path, source) for path, (_, source) in fresh.items()]
+
+    def sources(self) -> list[QuoteSource]:
+        return [source for _, source in self.files() if source.paragraphs]
 
     def pick(self, rng: random.Random | None = None) -> Quote | None:
         sources = self.sources()

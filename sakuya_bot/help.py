@@ -27,6 +27,7 @@ MANAGEMENT = """\
 • `/schedule list | edit | pause | resume | remove | test` — посмотреть, изменить, приостановить, удалить, проверить
 • `/reaction add` — ставить эмодзи (можно несколько — по порядку) и/или отвечать картинкой на слово в сообщении
 • `/reaction list | edit | pause | resume | remove`
+• `/quotes list | upload | download | remove` — тексты для `!цитата`
 • `/settings show | download | upload` — роли управления, каналы, кулдауны, часовой пояс, канал логов"""
 
 

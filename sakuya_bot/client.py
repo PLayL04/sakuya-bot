@@ -16,6 +16,7 @@ from .logs import log, who
 from .menus import MenuCog
 from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
+from .quotes.files import QuoteFilesCog
 from .reactions.cog import ReactionCog
 from .replies import respond
 from .rhymes.cog import RhymeCog
@@ -78,7 +79,9 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(BeerCog(self))
         await self.add_cog(DistortCog(self))
         await self.add_cog(MuseumCog(self))
-        await self.add_cog(QuoteCog(self))
+        quote_cog = QuoteCog(self)
+        await self.add_cog(quote_cog)
+        await self.add_cog(QuoteFilesCog(self, quote_cog.library), guild=GUILD)  # /quotes — та же папка текстов
         await self.add_cog(JokeCog(self))
         await self.add_cog(RhymeCog(self))
         # после команд с картинками: меню берёт их кулдауны, а /help — их алиасы
