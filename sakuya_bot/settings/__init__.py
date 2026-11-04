@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from ..config import DATA_DIR, ENV_DEFAULTS
-from .model import Settings, SettingsError, parse, render
+from .model import Settings, SettingsError, complete, parse, render
 
 SETTINGS_FILE = DATA_DIR / "settings.toml"
 log = logging.getLogger("sakuya-bot")  # не через ..logs: logs сам берёт отсюда часовой пояс
@@ -12,7 +12,8 @@ log = logging.getLogger("sakuya-bot")  # не через ..logs: logs сам б�
 
 class SettingsStore:
     """Файл настроек и действующие значения. Файл — документ модерации: бот его не переписывает
-    (комментарии сохраняются), а только создаёт при первом запуске и заменяет целиком при /settings upload."""
+    (комментарии сохраняются), а только создаёт при первом запуске, заменяет целиком при /settings upload
+    и дописывает ключи, появившиеся в новой версии бота."""
 
     def __init__(self, path: Path, initial: Settings):
         self.path = path
@@ -25,6 +26,15 @@ class SettingsStore:
             self._write(render(self.settings))
             log.info("Создан файл настроек %s (значения взяты из .env или по умолчанию)", self.path)
             return
+        try:
+            text, added = complete(self.read_text())
+        except UnicodeDecodeError:
+            added = []
+        if added:
+            # в новой версии бота появились настройки: дописываем их в файл, чтобы модерация их видела
+            self._write(text)
+            log.info("В файл настроек добавлены новые настройки: %s", ", ".join(f"[{f.section}] {f.key}" for f in added))
+        self._mtime = None  # при запуске файл читаем всегда (_write уже запомнил его время изменения)
         self.reload_if_changed()
 
     def reload_if_changed(self) -> bool:

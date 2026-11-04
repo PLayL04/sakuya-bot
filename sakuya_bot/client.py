@@ -16,6 +16,7 @@ from .replies import respond
 from .schedules.cog import ScheduleCog
 from .settings import current
 from .settings.cog import SettingsCog
+from .storage import remove_unused_images
 
 
 # что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
@@ -49,7 +50,14 @@ class SakuyaBot(commands.Bot):
         # синхронизация только для своего сервера — команды появляются сразу
         synced = await self.tree.sync(guild=GUILD)
         log.info("Слэш-команды синхронизированы с сервером %s: %s", GUILD_ID, ", ".join(f"/{c.name}" for c in synced))
+        self.cleanup_images()  # картинки, оставшиеся от сбоя посреди команды
         self.heartbeat.start()
+
+    def cleanup_images(self) -> None:
+        """Удаляет из img/ загруженные через бота картинки, которые больше не нужны ни одному правилу и расписанию."""
+        in_use = {s["image"] for s in self.schedule_cog.schedules}
+        in_use |= {r["media"] for r in self.reaction_cog.reactions if r.get("media")}
+        remove_unused_images(in_use)
 
     def stats(self) -> str:
         return f"расписаний: {len(self.schedule_cog.schedules)}, правил реакций: {len(self.reaction_cog.reactions)}"

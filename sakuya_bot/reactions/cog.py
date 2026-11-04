@@ -10,15 +10,24 @@ from discord.ext import commands
 from ..checks import AdminOnly
 from ..config import DATA_DIR, IMG_DIR
 from ..logs import log, who
+from ..modlog import notify
 from ..replies import respond, respond_lines
 from ..settings import current
-from ..storage import image_problem, list_images, load_json, save_image, save_json
+from ..storage import list_images, load_json, receive_image, save_json
 from .emojis import MAX_EMOJIS, custom_emoji_ids, split_emojis
 from .matching import MATCH_NAMES, rule_matches
 
 REACTIONS_FILE = DATA_DIR / "reactions.json"
 PING_EMOJI_FALLBACK = "💩"
 MAX_FILES = 10  # больше вложений в одном сообщении Discord не принимает
+CLEAR = "-"  # в /reaction edit emoji:- или file:- — убрать эмодзи или картинку
+
+MATCH_CHOICES = [
+    app_commands.Choice(name="Все формы слова («кот» сработает на «кота», «котами», но не на «котлета»)", value="forms"),
+    app_commands.Choice(name="Точное слово («кот» не сработает на «кота» и «котлета»)", value="word"),
+    app_commands.Choice(name="Часть слова («кот» сработает на «кота», «котлета»)", value="contains"),
+]
+NO_MENTIONS = discord.AllowedMentions.none()
 
 
 def ping_emoji(guild: discord.Guild) -> str:
@@ -49,6 +58,12 @@ def describe(rule: dict, code: bool = True) -> str:
     return " + ".join(parts)
 
 
+def summary(rule: dict) -> str:
+    """«`a1b2c3` — **кот** → 🐱 (все формы)» — для списка, ответов и канала логов."""
+    return (f"`{rule['id']}` — **{rule['word']}** → {describe(rule)} ({MATCH_NAMES[rule['match']]})"
+            + (" — ⏸️ на паузе" if rule.get("paused") else ""))
+
+
 @app_commands.guild_only()
 class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
                   group_description="Автоматические реакции на слова в сообщениях"):
@@ -76,6 +91,8 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         now = time.monotonic()
         cooldown = current().image_reply_cooldown  # одно правило отвечает картинкой в канале не чаще (0 — без ограничения)
         for rule in self.reactions:
+            if rule.get("paused"):
+                continue
             file = rule.get("media")
             # эмодзи правила ставятся по порядку (так из них складывается комбинация, например 🇰 🇴 🇹);
             # уже поставленные другим правилом пропускаются — одинаковую реакцию Discord дважды не ставит
@@ -129,6 +146,20 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
             if current.lower() in name.lower()
         ][:25]
 
+    async def read_emojis(self, interaction: discord.Interaction, text: str) -> list[str] | None:
+        """Поле emoji -> список эмодзи по порядку; None — модератору уже ответили, что не так."""
+        try:
+            emojis = split_emojis(text)
+        except ValueError as e:
+            await respond(interaction, str(e))
+            return None
+        # эмодзи сервера: бот должен иметь к нему доступ
+        if unseen := [i for i in custom_emoji_ids(emojis) if not self.bot.get_emoji(i)]:
+            bad = next(e for e in emojis if str(unseen[0]) in e)
+            await respond(interaction, f"Бот не видит эмодзи {bad} — используйте эмодзи этого сервера.")
+            return None
+        return emojis
+
     @app_commands.command(name="add", description="Ставить реакцию и/или отвечать картинкой на сообщения с этим словом")
     @app_commands.describe(
         word="Слово или фраза (регистр не важен)",
@@ -138,11 +169,7 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         file="Или отвечать картинкой из папки img",
     )
     @app_commands.autocomplete(file=image_autocomplete)
-    @app_commands.choices(match=[
-        app_commands.Choice(name="Все формы слова («кот» сработает на «кота», «котами», но не на «котлета»)", value="forms"),
-        app_commands.Choice(name="Точное слово («кот» не сработает на «кота» и «котлета»)", value="word"),
-        app_commands.Choice(name="Часть слова («кот» сработает на «кота», «котлета»)", value="contains"),
-    ])
+    @app_commands.choices(match=MATCH_CHOICES)
     async def add(
         self,
         interaction: discord.Interaction,
@@ -159,32 +186,11 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         if not (emoji or "").strip() and not image and not file:
             await respond(interaction, "Укажите эмодзи (`emoji`) и/или картинку для ответа (`image` или `file`).")
             return
-
         emojis = []
-        if (emoji or "").strip():
-            try:
-                emojis = split_emojis(emoji)
-            except ValueError as e:
-                await respond(interaction, str(e))
-                return
-            # эмодзи сервера: бот должен иметь к нему доступ
-            if unseen := [i for i in custom_emoji_ids(emojis) if not self.bot.get_emoji(i)]:
-                bad = next(e for e in emojis if str(unseen[0]) in e)
-                await respond(interaction, f"Бот не видит эмодзи {bad} — используйте эмодзи этого сервера.")
-                return
-
-        if problem := image_problem(image, file, interaction.guild):
-            await respond(interaction, problem)
+        if (emoji or "").strip() and (emojis := await self.read_emojis(interaction, emoji)) is None:
             return
-        if image:
-            # скачивание может занять больше 3 секунд, которые Discord ждёт ответа, — сначала «бот думает…»
-            await interaction.response.defer(ephemeral=True)
-            try:
-                file = await save_image(image)
-            except (discord.HTTPException, OSError) as e:
-                log.error("Не удалось сохранить картинку %s для правила реакции: %s", image.filename, e)
-                await respond(interaction, "Не удалось скачать картинку, попробуйте ещё раз.")
-                return
+        if (image or file) and not (file := await receive_image(interaction, image, file)):
+            return
 
         rule = {"id": uuid.uuid4().hex[:6], "word": word, "emojis": emojis, "media": file, "match": match}
         self.reactions.append(rule)
@@ -196,35 +202,136 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         if file:
             actions.append(f"отвечать картинкой `{file}`")
         await respond(interaction, f"Готово! На сообщения со словом **{word}** бот будет {' и '.join(actions)}. ID: `{rule['id']}`")
+        await notify(self.bot, f"💬 {interaction.user.mention} создаёт правило реакции: {summary(rule)}")
 
     @app_commands.command(name="list", description="Показать все правила реакций")
     async def list_(self, interaction: discord.Interaction):
         if not self.reactions:
-            await interaction.response.send_message("Правил пока нет.", ephemeral=True)
+            await respond(interaction, "Правил пока нет.")
             return
-        lines = [
-            f"`{r['id']}` — **{r['word']}** → {describe(r)} ({MATCH_NAMES[r['match']]})"
-            for r in sorted(self.reactions, key=lambda r: r["word"])
-        ]
-        await respond_lines(interaction, lines)
+        await respond_lines(interaction, [summary(r) for r in sorted(self.reactions, key=lambda r: r["word"])])
 
     async def id_autocomplete(self, interaction: discord.Interaction, current: str):
         current = current.lower()
         return [
-            app_commands.Choice(name=f"{r['id']} — {r['word']} {describe(r, code=False)}"[:100], value=r["id"])
+            app_commands.Choice(name=f"{r['id']} — {r['word']} {describe(r, code=False)}"
+                                     f"{' (на паузе)' if r.get('paused') else ''}"[:100], value=r["id"])
             for r in self.reactions
             if current in r["id"] or current in r["word"]
         ][:25]
+
+    def find(self, rule_id: str) -> dict | None:
+        return next((r for r in self.reactions if r["id"] == rule_id), None)
+
+    @app_commands.command(name="edit", description="Изменить правило реакции: слово, эмодзи, способ поиска или картинку")
+    @app_commands.describe(
+        id="ID правила (см. /reaction list)",
+        word="Новое слово или фраза",
+        emoji="Новые эмодзи (по порядку); «-» — убрать эмодзи",
+        match="Как искать слово",
+        image="Загрузить новую картинку для ответа",
+        file="Или выбрать другую из папки img; «-» — убрать картинку",
+    )
+    @app_commands.autocomplete(id=id_autocomplete, file=image_autocomplete)
+    @app_commands.choices(match=MATCH_CHOICES)
+    async def edit(
+        self,
+        interaction: discord.Interaction,
+        id: str,
+        word: str | None = None,
+        emoji: str | None = None,
+        match: str | None = None,
+        image: discord.Attachment | None = None,
+        file: str | None = None,
+    ):
+        rule = self.find(id)
+        if not rule:
+            await respond(interaction, "Правило не найдено.")
+            return
+        if all(v is None for v in (word, emoji, match, image, file)):
+            await respond(interaction, "Укажите, что изменить: слово, эмодзи, способ поиска или картинку.")
+            return
+        new = dict(rule)
+        if word is not None:
+            new["word"] = word.strip().lower()
+            if not new["word"]:
+                await respond(interaction, "Слово не может быть пустым.")
+                return
+        if match is not None:
+            new["match"] = match
+        if emoji is not None:
+            emojis = [] if emoji.strip() == CLEAR else await self.read_emojis(interaction, emoji)
+            if emojis is None:
+                return
+            new["emojis"] = emojis
+        clear_media = not image and file is not None and file.strip() == CLEAR
+        new_media = bool(image) or (file is not None and not clear_media)  # будет новая картинка
+        if clear_media:
+            new["media"] = None
+        if not new["emojis"] and not new["media"] and not new_media:
+            await respond(interaction, "У правила не останется ни эмодзи, ни картинки — тогда его проще удалить: `/reaction remove`.")
+            return
+        if new_media:
+            if not (new_file := await receive_image(interaction, image, file)):
+                return
+            new["media"] = new_file
+        if rule not in self.reactions:  # удалили, пока скачивалась картинка
+            await respond(interaction, "Правило удалили, пока вы его меняли.")
+            self.bot.cleanup_images()
+            return
+        before = summary(rule)
+        rule.update(new)
+        self.save()
+        self.bot.cleanup_images()
+        log.info("Изменено правило реакции %s пользователем %s: %s → %s", id, who(interaction.user), before, summary(rule))
+        await respond(interaction, f"Готово! {summary(rule)}")
+        await notify(self.bot, f"✏️ {interaction.user.mention} изменяет правило реакции:\n{before}\n→ {summary(rule)}")
+
+    @app_commands.command(name="pause", description="Временно выключить правило реакции (не удаляя его)")
+    @app_commands.describe(id="ID правила (см. /reaction list)")
+    @app_commands.autocomplete(id=id_autocomplete)
+    async def pause(self, interaction: discord.Interaction, id: str):
+        rule = self.find(id)
+        if not rule:
+            await respond(interaction, "Правило не найдено.")
+            return
+        if rule.get("paused"):
+            await respond(interaction, f"Правило `{id}` уже на паузе. Включить — `/reaction resume`.")
+            return
+        rule["paused"] = True
+        self.save()
+        log.info("Правило реакции %s поставлено на паузу пользователем %s", id, who(interaction.user))
+        await respond(interaction, f"Правило `{id}` на паузе и не срабатывает. Включить — `/reaction resume`.")
+        await notify(self.bot, f"⏸️ {interaction.user.mention} ставит на паузу правило реакции: {summary(rule)}")
+
+    @app_commands.command(name="resume", description="Снова включить правило реакции")
+    @app_commands.describe(id="ID правила (см. /reaction list)")
+    @app_commands.autocomplete(id=id_autocomplete)
+    async def resume(self, interaction: discord.Interaction, id: str):
+        rule = self.find(id)
+        if not rule:
+            await respond(interaction, "Правило не найдено.")
+            return
+        if not rule.get("paused"):
+            await respond(interaction, f"Правило `{id}` и так работает.")
+            return
+        del rule["paused"]
+        self.save()
+        log.info("Правило реакции %s снято с паузы пользователем %s", id, who(interaction.user))
+        await respond(interaction, f"Правило `{id}` снова работает.")
+        await notify(self.bot, f"▶️ {interaction.user.mention} снимает с паузы правило реакции: {summary(rule)}")
 
     @app_commands.command(name="remove", description="Удалить правило реакции")
     @app_commands.describe(id="ID правила (см. /reaction list)")
     @app_commands.autocomplete(id=id_autocomplete)
     async def remove(self, interaction: discord.Interaction, id: str):
-        rule = next((r for r in self.reactions if r["id"] == id), None)
+        rule = self.find(id)
         if not rule:
-            await interaction.response.send_message("Правило не найдено.", ephemeral=True)
+            await respond(interaction, "Правило не найдено.")
             return
         self.reactions.remove(rule)
         self.save()
+        self.bot.cleanup_images()
         log.info("Удалено правило реакции %s («%s» → %s) пользователем %s", id, rule["word"], describe(rule), who(interaction.user))
-        await interaction.response.send_message(f"Правило `{id}` удалено.", ephemeral=True)
+        await respond(interaction, f"Правило `{id}` удалено.")
+        await notify(self.bot, f"🗑️ {interaction.user.mention} удаляет правило реакции: {summary(rule)}")

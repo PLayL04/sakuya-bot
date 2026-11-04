@@ -6,8 +6,11 @@ from pathlib import Path
 
 import discord
 
-from .config import IMG_DIR, IMG_EXTENSIONS
+from .config import DATA_DIR, IMG_DIR, IMG_EXTENSIONS
 from .logs import log
+from .replies import respond
+
+UPLOADS_FILE = DATA_DIR / "uploads.json"  # картинки, загруженные через команды: только их бот удаляет сам
 
 
 def load_json(path: Path) -> list[dict]:
@@ -62,5 +65,38 @@ async def save_image(attachment: discord.Attachment) -> str:
     file = f"{path.stem}-{uuid.uuid4().hex[:6]}{path.suffix.lower()}"
     IMG_DIR.mkdir(exist_ok=True)
     await attachment.save(IMG_DIR / file)
+    save_json(UPLOADS_FILE, load_json(UPLOADS_FILE) + [file])
     log.info("Сохранена картинка %s (%d КБ)", file, attachment.size // 1024)
     return file
+
+
+def remove_unused_images(in_use: set[str]) -> list[str]:
+    """Удаляет из img/ картинки, загруженные через бота, которые больше не нужны ни одному правилу и расписанию.
+    Файлы, положенные в img/ вручную, не трогаются: удаляются только те, что записаны в data/uploads.json."""
+    uploads = load_json(UPLOADS_FILE)
+    unused = [f for f in uploads if f not in in_use]
+    if not unused:
+        return []
+    for file in unused:
+        (IMG_DIR / file).unlink(missing_ok=True)
+        log.info("Удалена картинка %s: она больше не используется ни в одном правиле или расписании", file)
+    save_json(UPLOADS_FILE, [f for f in uploads if f in in_use])
+    return unused
+
+
+async def receive_image(interaction: discord.Interaction, image: discord.Attachment | None, file: str | None) -> str | None:
+    """Картинка для правила или расписания: проверяет её и, если загружена новая, сохраняет в img/.
+    Возвращает имя файла в img/; None — модератору уже ответили, что не так.
+    Скачивание может занять больше 3 секунд, которые Discord ждёт ответа, — поэтому сначала «бот думает…» (defer)."""
+    if problem := image_problem(image, file, interaction.guild):
+        await respond(interaction, problem)
+        return None
+    if not image:
+        return file
+    await interaction.response.defer(ephemeral=True)
+    try:
+        return await save_image(image)
+    except (discord.HTTPException, OSError) as e:
+        log.error("Не удалось сохранить картинку %s: %s", image.filename, e)
+        await respond(interaction, "Не удалось скачать картинку, попробуйте ещё раз.")
+        return None

@@ -14,6 +14,7 @@ class Settings:
     image_reply_cooldown: int = 60
     ping_emoji: str = "MadelineAlo"
     timezone: str = "Europe/Moscow"
+    log_channel: int = 0  # 0 — канал логов не задан
 
     @property
     def tz(self) -> ZoneInfo:
@@ -25,7 +26,7 @@ class Field:
     section: str
     key: str
     attr: str  # поле Settings
-    kind: str  # roles | channels | seconds | name | timezone
+    kind: str  # roles | channels | channel | seconds | name | timezone
     title: str  # для /settings show и списка изменений
     comment: str  # комментарий над строкой в файле
     max: int = 0  # для seconds
@@ -50,6 +51,10 @@ FIELDS = [
           "Часовой пояс, в котором указывается время в /schedule (и время в логах бота).\n"
           "Например \"Europe/Moscow\", \"Europe/Kaliningrad\", \"Asia/Yekaterinburg\", \"Asia/Novosibirsk\".\n"
           "Уже созданные расписания после смены пояса срабатывают в то же время, но по новому поясу."),
+    Field("logs", "channel", "log_channel", "channel", "Канал логов",
+          "Канал для модераторов, куда бот пишет, кто создал, изменил или удалил правило и расписание, кто поменял\n"
+          "настройки, и какое расписание не удалось отправить. ID канала; 0 — не писать.\n"
+          "Боту нужны права «Просматривать канал» и «Отправлять сообщения» в этом канале."),
 ]
 
 HEADER = """\
@@ -117,6 +122,10 @@ def _convert(field: Field, value):
                 raise ValueError(f"«{item}» не похоже на ID — это должно быть число из 17–20 цифр")
             ids.add(int(str(item).strip()))
         return frozenset(ids)
+    if field.kind == "channel":
+        if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
+            raise ValueError(f"«{value}» не похоже на ID канала — нужно число из 17–20 цифр, или 0, чтобы выключить")
+        return int(str(value).strip())
     if field.kind == "seconds":
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= field.max:
             raise ValueError(f"нужно целое число секунд от 0 до {field.max}, а указано {value!r}")
@@ -153,9 +162,40 @@ def render(settings: Settings) -> str:
         if f.section != section:
             section = f.section
             lines.append(f"\n[{section}]")
-        lines += [f"# {line}" for line in f.comment.split("\n")]
-        lines.append(f"{f.key} = {_toml_value(getattr(settings, f.attr))}")
+        lines += _field_lines(f, settings)
     return "\n".join(lines) + "\n"
+
+
+def _field_lines(f: Field, settings: Settings) -> list[str]:
+    return [f"# {line}" for line in f.comment.split("\n")] + [f"{f.key} = {_toml_value(getattr(settings, f.attr))}"]
+
+
+def complete(text: str) -> tuple[str, list[Field]]:
+    """Дописывает в файл модерации ключи, которых в нём нет (появились в новой версии бота), со значениями
+    по умолчанию и подсказками. Остальной текст и комментарии не трогаются. Возвращает текст и что дописано.
+    Файл с ошибкой не меняется."""
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError:
+        return text, []
+    missing = [f for f in FIELDS if f.key not in data.get(f.section, {})]
+    if not missing:
+        return text, []
+    lines = text.rstrip("\n").split("\n")
+    defaults = Settings()
+    for f in missing:
+        block = _field_lines(f, defaults)
+        if f.section in data:
+            # ключ — сразу под заголовком его раздела (заголовок «[раздел]», можно с комментарием после)
+            at = next((i for i, line in enumerate(lines) if line.split("#")[0].strip() == f"[{f.section}]"), None)
+            if at is None:
+                return text, []  # раздел записан как-то иначе (fun.cooldown = …) — не рискуем испортить файл
+            lines[at + 1:at + 1] = block
+        else:
+            lines += ["", f"[{f.section}]"] + block
+            data[f.section] = {}
+        data[f.section][f.key] = True
+    return "\n".join(lines) + "\n", missing
 
 
 def describe_value(field: Field, value, mention: Callable[[str, int], str] = lambda kind, i: str(i)) -> str:
@@ -164,6 +204,8 @@ def describe_value(field: Field, value, mention: Callable[[str, int], str] = lam
         if not value:
             return "во всех каналах" if field.kind == "channels" else "нет (только «Управлять сервером»)"
         return ", ".join(mention(field.kind, i) for i in sorted(value))
+    if field.kind == "channel":
+        return mention("channels", value) if value else "не задан"
     if field.kind == "seconds":
         return f"{value} с" if value else "без ограничения"
     return str(value)

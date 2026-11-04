@@ -6,8 +6,9 @@ import discord
 from discord import app_commands
 from discord.ext import commands, tasks
 
-from ..checks import AdminOnly
+from ..checks import SEND_PERMISSIONS, AdminOnly, missing_permissions
 from ..logs import log, who
+from ..modlog import notify
 from . import STORE, current
 from .model import FIELDS, Settings, SettingsError, changes, describe_value, parse
 
@@ -26,7 +27,18 @@ def guild_warnings(settings: Settings, guild: discord.Guild) -> list[str]:
                  for i in sorted(settings.fun_channels) if guild.get_channel_or_thread(i) is None]
     if discord.utils.get(guild.emojis, name=settings.ping_emoji) is None:
         warnings.append(f"эмодзи `:{settings.ping_emoji}:` нет на сервере — на пинг будет ставиться 💩")
+    if settings.log_channel:
+        channel = guild.get_channel_or_thread(settings.log_channel)
+        if channel is None:
+            warnings.append(f"канала логов с ID `{settings.log_channel}` нет на сервере (или бот его не видит)")
+        elif missing := missing_permissions(channel, guild.me, SEND_PERMISSIONS):
+            warnings.append(f"в канале логов {channel.mention} у бота нет прав: {', '.join(missing)}")
     return warnings
+
+
+def change_lines(old: Settings, new: Settings, diff: list) -> list[str]:
+    return [f"• **{f.title}:** {describe_value(f, getattr(old, f.attr), mention)} → "
+            f"{describe_value(f, getattr(new, f.attr), mention)}" for f in diff]
 
 
 def keeps_access(member: discord.Member, settings: Settings) -> bool:
@@ -53,9 +65,12 @@ class SettingsCog(AdminOnly, commands.GroupCog, group_name="settings",
         # файл можно поправить и прямо на сервере (VPS): изменения подхватываются без перезапуска бота
         old = current()
         if STORE.reload_if_changed():
-            for f in changes(old, current()):
+            diff = changes(old, current())
+            for f in diff:
                 log.info("Настройка «%s»: %s → %s", f.title, describe_value(f, getattr(old, f.attr)),
                          describe_value(f, getattr(current(), f.attr)))
+            if diff:
+                await notify(self.bot, "⚙️ Настройки изменены в файле на сервере:\n" + "\n".join(change_lines(old, current(), diff)))
 
     @app_commands.command(name="show", description="Показать текущие настройки бота")
     async def show(self, interaction: discord.Interaction):
@@ -64,7 +79,7 @@ class SettingsCog(AdminOnly, commands.GroupCog, group_name="settings",
         warnings = guild_warnings(s, interaction.guild)
         if warnings:
             lines.append("\n⚠️ " + "\n⚠️ ".join(warnings))
-        lines.append("\nИзменить: `/settings download` → поправить файл → `/settings upload`.")
+        lines.append("\nИзменить:`/settings download` → поправить файл → `/settings upload`.")
         await interaction.response.send_message("\n".join(lines), ephemeral=True, allowed_mentions=NO_MENTIONS)
 
     @app_commands.command(name="download", description="Скачать файл настроек, чтобы его исправить")
@@ -110,9 +125,8 @@ class SettingsCog(AdminOnly, commands.GroupCog, group_name="settings",
             log.info("Настройка «%s» изменена пользователем %s: %s → %s", f.title, who(interaction.user),
                      describe_value(f, getattr(old, f.attr)), describe_value(f, getattr(new, f.attr)))
         if diff:
-            lines = ["Настройки сохранены. Изменено:"] + [
-                f"• **{f.title}:** {describe_value(f, getattr(old, f.attr), mention)} → "
-                f"{describe_value(f, getattr(new, f.attr), mention)}" for f in diff]
+            lines = ["Настройки сохранены. Изменено:"] + change_lines(old, new, diff)
+            await notify(self.bot, f"⚙️ {interaction.user.mention} изменяет настройки:\n" + "\n".join(change_lines(old, new, diff)))
         else:
             log.info("Файл настроек загружен пользователем %s без изменений значений", who(interaction.user))
             lines = ["Файл сохранён, значения настроек не изменились."]

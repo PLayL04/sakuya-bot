@@ -71,6 +71,53 @@ def last_passed_day(sched: dict, now: datetime) -> str:
     return day.isoformat()
 
 
+def keep_sent(sched: dict, now: datetime) -> str:
+    """last_sent после изменения расписания или снятия с паузы: не отправлять задним числом то, что уже прошло
+    (как у нового расписания), но и не отправлять повторно, если за сегодня уже отправили."""
+    return max(sched.get("last_sent") or "", last_passed_day(sched, now))
+
+
+def once_passed(sched: dict, now: datetime) -> bool:
+    """Время одноразового расписания уже наступило — создать или включить такое нельзя."""
+    return sched.get("kind") == "once" and (sched["date"], sched["time"]) <= (now.date().isoformat(), now.strftime("%H:%M"))
+
+
+def parse_time(text: str) -> str:
+    """«8:00» -> «08:00». ValueError с текстом для ответа, если формат неверный."""
+    m = TIME_RE.match(text.strip())
+    if not m:
+        raise ValueError("Неверный формат времени. Пример: `08:00`")
+    return f"{int(m[1]):02d}:{m[2]}"
+
+
+def parse_date(text: str, kind: str, today: date) -> str:
+    """Дата для /schedule yearly («ДД.ММ» -> «ММ-ДД») и /schedule once («ДД.ММ.ГГГГ» или «ДД.ММ» -> «ГГГГ-ММ-ДД»).
+    У once без года — ближайшая такая дата: в этом году, а если она уже прошла — в следующем.
+    ValueError с текстом для ответа, если дата неверная."""
+    m = DATE_RE.match(text.strip())
+    if not m:
+        example = "`01.01`" if kind == "yearly" else "`01.01.2027` или `01.01` (ближайшее 1 января)"
+        raise ValueError(f"Неверная дата. Пример: {example}")
+    day, month, year = int(m[1]), int(m[2]), m[3]
+    if kind == "yearly" and year:
+        raise ValueError("Для ежегодной отправки год не нужен: `01.01`. Один раз — команда `/schedule once`.")
+    try:
+        if kind == "yearly":
+            date(2000, month, day)  # 2000 — високосный: 29.02 — допустимая ежегодная дата (в другие годы — 28.02)
+            return f"{month:02d}-{day:02d}"
+        if year:
+            return date(int(year), month, day).isoformat()
+        found = date(today.year, month, day) if (month, day) != (2, 29) or calendar.isleap(today.year) else None
+        if found is None or found < today:
+            year = today.year + 1
+            while (month, day) == (2, 29) and not calendar.isleap(year):
+                year += 1
+            found = date(year, month, day)
+        return found.isoformat()
+    except ValueError as e:
+        raise ValueError(f"Такой даты нет: {text.strip()}") from e
+
+
 def describe_schedule(sched: dict) -> str:
     kind = sched.get("kind", "daily")
     time = sched["time"]

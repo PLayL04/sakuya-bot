@@ -13,6 +13,17 @@ def is_admin(user: discord.abc.User) -> bool:
     return user.guild_permissions.manage_guild or any(r.id in current().admin_roles for r in user.roles)
 
 
+# права бота: название в Discord — для ответа модератору
+SEND_PERMISSIONS = {"view_channel": "Просматривать канал", "send_messages": "Отправлять сообщения"}
+SEND_FILES_PERMISSIONS = SEND_PERMISSIONS | {"attach_files": "Прикреплять файлы"}
+
+
+def missing_permissions(channel: discord.abc.GuildChannel, member: discord.Member, needed: dict[str, str]) -> list[str]:
+    """Каких прав из needed нет у участника (обычно у самого бота) в канале, с учётом настроек канала."""
+    perms = channel.permissions_for(member)
+    return [title for name, title in needed.items() if not getattr(perms, name)]
+
+
 class AdminOnly:
     """Примесь для кога: все его слэш-команды доступны только тем, кто управляет ботом (см. is_admin).
 
