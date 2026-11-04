@@ -12,6 +12,7 @@ from .logs import log, who
 from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
 from .reactions.cog import ReactionCog
+from .replies import respond
 from .schedules.cog import ScheduleCog
 from .settings import current
 from .settings.cog import SettingsCog
@@ -68,15 +69,22 @@ class SakuyaBot(commands.Bot):
                  f" ({params})" if params else "")
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
+        name = interaction.command.qualified_name if interaction.command else "?"
         if isinstance(error, app_commands.CheckFailure):
-            name = interaction.command.qualified_name if interaction.command else "?"
             log.warning("Отказано в доступе: /%s от %s (нет ни одной из ролей %s и права «Управлять сервером»)",
                         name, who(interaction.user), ", ".join(map(str, sorted(current().admin_roles))) or "—")
-            await interaction.response.send_message(
-                "Эта команда доступна только участникам с ролью управления ботом или правом «Управлять сервером».",
-                ephemeral=True)
-            return
-        await app_commands.CommandTree.on_error(self.tree, interaction, error)
+            text = "Эта команда доступна только участникам с ролью управления ботом или правом «Управлять сервером»."
+        else:
+            original = getattr(error, "original", error)
+            log.error("Ошибка команды /%s от %s: %s", name, who(interaction.user), original, exc_info=original)
+            # иначе у модератора просто повиснет «Приложение не отвечает»
+            text = f"Что-то пошло не так ({type(original).__name__}). Подробности — в логе бота, попробуйте ещё раз позже."
+        if interaction.type == discord.InteractionType.autocomplete:
+            return  # на подсказки при вводе сообщением не ответить
+        try:
+            await respond(interaction, text)
+        except discord.HTTPException as e:
+            log.error("Не удалось сообщить об ошибке команды /%s: %s", name, e)  # например, ответ уже просрочен
 
     async def on_command_error(self, ctx: commands.Context, error: commands.CommandError):
         if isinstance(error, commands.CommandNotFound):

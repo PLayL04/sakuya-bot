@@ -12,14 +12,21 @@ from discord.ext import commands, tasks
 from ..checks import AdminOnly
 from ..config import DATA_DIR, IMG_DIR
 from ..logs import log, who
+from ..replies import respond, respond_lines
 from ..settings import current
-from ..storage import is_image, list_images, load_json, save_image, save_json
+from ..storage import image_problem, list_images, load_json, save_image, save_json
 from .rules import DATE_RE, TIME_RE, WEEKDAYS, describe_schedule, due_occurrence, last_passed_day, missed_once
 
 SCHEDULES_FILE = DATA_DIR / "schedules.json"
 # сколько после назначенного времени ещё можно отправить (бот перезапускался, сеть, сбой Discord);
 # позже — отправка за этот день пропускается, чтобы «доброе утро» не пришло в обед
 SEND_GRACE = timedelta(minutes=30)
+LIST_MESSAGE_PREVIEW = 80  # сколько символов текста к картинке показывать в /schedule list
+
+
+def shorten(text: str, limit: int = LIST_MESSAGE_PREVIEW) -> str:
+    text = " ".join(text.split())  # переносы строк ломают вид списка
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 @app_commands.guild_only()
@@ -126,18 +133,21 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             await interaction.response.send_message("Эта дата и время уже прошли.", ephemeral=True)
             return
 
-        if image:
-            if not is_image(image):
-                await interaction.response.send_message("Это не картинка.", ephemeral=True)
-                return
-            file = await save_image(image)
-        elif file:
-            if file not in list_images():
-                await interaction.response.send_message(f"Файл `{file}` не найден в папке img.", ephemeral=True)
-                return
-        else:
-            await interaction.response.send_message("Нужно загрузить картинку (`image`) или выбрать файл (`file`).", ephemeral=True)
+        if not image and not file:
+            await respond(interaction, "Нужно загрузить картинку (`image`) или выбрать файл (`file`).")
             return
+        if problem := image_problem(image, file, interaction.guild):
+            await respond(interaction, problem)
+            return
+        if image:
+            # скачивание может занять больше 3 секунд, которые Discord ждёт ответа, — сначала «бот думает…»
+            await interaction.response.defer(ephemeral=True)
+            try:
+                file = await save_image(image)
+            except (discord.HTTPException, OSError) as e:
+                log.error("Не удалось сохранить картинку %s для расписания: %s", image.filename, e)
+                await respond(interaction, "Не удалось скачать картинку, попробуйте ещё раз.")
+                return
 
         sched = {
             "id": uuid.uuid4().hex[:6],
@@ -153,10 +163,8 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
         self.save()
         when = describe_schedule(sched)
         log.info("Создано расписание %s: %s в #%s, картинка %s (автор %s)", sched["id"], when, channel, file, who(interaction.user))
-        await interaction.response.send_message(
-            f"Готово! {when[0].upper() + when[1:]} ({current().timezone}) в {channel.mention} будет отправляться `{file}`. ID: `{sched['id']}`",
-            ephemeral=True,
-        )
+        await respond(interaction, f"Готово! {when[0].upper() + when[1:]} ({current().timezone}) в {channel.mention} "
+                                   f"будет отправляться `{file}`. ID: `{sched['id']}`")
 
     @app_commands.command(name="daily", description="Отправлять картинку каждый день")
     @app_commands.describe(
@@ -266,10 +274,10 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             return
         lines = [
             f"`{s['id']}` — **{describe_schedule(s)}** в <#{s['channel_id']}>: `{s['image']}`"
-            + (f" — «{s['message']}»" if s.get("message") else "")
+            + (f" — «{shorten(s['message'])}»" if s.get("message") else "")
             for s in sorted(self.schedules, key=lambda s: s["time"])
         ]
-        await interaction.response.send_message(f"Часовой пояс: {current().timezone}\n" + "\n".join(lines), ephemeral=True)
+        await respond_lines(interaction, lines, header=f"Часовой пояс: {current().timezone}")
 
     async def id_autocomplete(self, interaction: discord.Interaction, current: str):
         return [

@@ -10,8 +10,10 @@ from discord.ext import commands
 from ..checks import AdminOnly
 from ..config import DATA_DIR, IMG_DIR
 from ..logs import log, who
+from ..replies import respond, respond_lines
 from ..settings import current
-from ..storage import is_image, list_images, load_json, save_image, save_json
+from ..storage import image_problem, list_images, load_json, save_image, save_json
+from .emojis import MAX_EMOJIS, custom_emoji_ids, split_emojis
 from .matching import MATCH_NAMES, rule_matches
 
 REACTIONS_FILE = DATA_DIR / "reactions.json"
@@ -29,11 +31,19 @@ def ping_emoji(guild: discord.Guild) -> str:
     return str(emoji)  # «<:MadelineAlo:id>» или «<a:MadelineAlo:id>» для анимированного
 
 
+def upgrade_rule(rule: dict) -> dict:
+    """Старые правила хранили один эмодзи в «emoji», новые — список «emojis» (ставятся по порядку)."""
+    if "emojis" not in rule:
+        old = rule.pop("emoji", None)
+        rule["emojis"] = [old] if old else []
+    return rule
+
+
 def describe(rule: dict, code: bool = True) -> str:
-    """«🐱 + картинка `cat.gif`»: что делает правило (в старых правилах есть только эмодзи)."""
+    """«🇰 🇴 🇹 + картинка `cat.gif`»: что делает правило (в старых правилах есть только эмодзи)."""
     parts = []
-    if rule.get("emoji"):
-        parts.append(rule["emoji"])
+    if rule["emojis"]:
+        parts.append(" ".join(rule["emojis"]))
     if rule.get("media"):
         parts.append(f"картинка `{rule['media']}`" if code else f"картинка {rule['media']}")
     return " + ".join(parts)
@@ -45,7 +55,7 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
 
     def __init__(self, bot: commands.Bot):
         self.bot = bot
-        self.reactions: list[dict] = load_json(REACTIONS_FILE)
+        self.reactions: list[dict] = [upgrade_rule(r) for r in load_json(REACTIONS_FILE)]
         self.last_media: dict[tuple[str, int], float] = {}  # (ID правила, ID канала) -> когда отвечали картинкой
 
     def save(self) -> None:
@@ -66,12 +76,14 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         now = time.monotonic()
         cooldown = current().image_reply_cooldown  # одно правило отвечает картинкой в канале не чаще (0 — без ограничения)
         for rule in self.reactions:
-            emoji, file = rule.get("emoji"), rule.get("media")
-            new_emoji = emoji and emoji not in emojis
+            file = rule.get("media")
+            # эмодзи правила ставятся по порядку (так из них складывается комбинация, например 🇰 🇴 🇹);
+            # уже поставленные другим правилом пропускаются — одинаковую реакцию Discord дважды не ставит
+            new_emojis = [e for e in rule["emojis"] if e not in emojis][: MAX_EMOJIS - len(emojis)]
             new_file = file and file not in media and len(media) < MAX_FILES
-            if not (new_emoji or new_file) or not rule_matches(rule, text):
+            if not (new_emojis or new_file) or not rule_matches(rule, text):
                 continue
-            if new_emoji:
+            for emoji in new_emojis:
                 emojis[emoji] = f"слово «{rule['word']}» (правило {rule['id']})"
             if new_file:
                 key = (rule["id"], message.channel.id)
@@ -120,7 +132,7 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
     @app_commands.command(name="add", description="Ставить реакцию и/или отвечать картинкой на сообщения с этим словом")
     @app_commands.describe(
         word="Слово или фраза (регистр не важен)",
-        emoji="Эмодзи: обычный 😀 или эмодзи этого сервера",
+        emoji="Эмодзи: один или несколько (бот поставит их по порядку). Буквы 🇰 🇴 🇹 — через пробел",
         match="Как искать слово",
         image="Отвечать на сообщение этой картинкой или GIF (загрузить новую)",
         file="Или отвечать картинкой из папки img",
@@ -141,53 +153,49 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
         file: str | None = None,
     ):
         word = word.strip().lower()
-        emoji = (emoji or "").strip() or None
         if not word:
-            await interaction.response.send_message("Слово не может быть пустым.", ephemeral=True)
+            await respond(interaction, "Слово не может быть пустым.")
             return
-        if not emoji and not image and not file:
-            await interaction.response.send_message(
-                "Укажите эмодзи (`emoji`) и/или картинку для ответа (`image` или `file`).", ephemeral=True)
+        if not (emoji or "").strip() and not image and not file:
+            await respond(interaction, "Укажите эмодзи (`emoji`) и/или картинку для ответа (`image` или `file`).")
             return
 
-        partial = discord.PartialEmoji.from_str(emoji) if emoji else None
-        if partial and partial.id:
+        emojis = []
+        if (emoji or "").strip():
+            try:
+                emojis = split_emojis(emoji)
+            except ValueError as e:
+                await respond(interaction, str(e))
+                return
             # эмодзи сервера: бот должен иметь к нему доступ
-            if not self.bot.get_emoji(partial.id):
-                await interaction.response.send_message("Бот не видит этот эмодзи — используйте эмодзи этого сервера.", ephemeral=True)
+            if unseen := [i for i in custom_emoji_ids(emojis) if not self.bot.get_emoji(i)]:
+                bad = next(e for e in emojis if str(unseen[0]) in e)
+                await respond(interaction, f"Бот не видит эмодзи {bad} — используйте эмодзи этого сервера.")
                 return
-        elif emoji and any(ch.isascii() and ch.isalnum() for ch in emoji):
-            await interaction.response.send_message("Это не похоже на эмодзи. Выберите его через панель эмодзи Discord.", ephemeral=True)
+
+        if problem := image_problem(image, file, interaction.guild):
+            await respond(interaction, problem)
             return
-
         if image:
-            if not is_image(image):
-                await interaction.response.send_message("Это не картинка (подходят PNG, JPG, GIF, WEBP).", ephemeral=True)
-                return
-            if image.size > interaction.guild.filesize_limit:
-                await interaction.response.send_message(
-                    f"Файл слишком большой: на этом сервере бот может отправлять до {interaction.guild.filesize_limit // 2**20} МБ.",
-                    ephemeral=True)
-                return
-            file = await save_image(image)
-        elif file:
-            if file not in list_images():
-                await interaction.response.send_message(f"Файл `{file}` не найден в папке img.", ephemeral=True)
+            # скачивание может занять больше 3 секунд, которые Discord ждёт ответа, — сначала «бот думает…»
+            await interaction.response.defer(ephemeral=True)
+            try:
+                file = await save_image(image)
+            except (discord.HTTPException, OSError) as e:
+                log.error("Не удалось сохранить картинку %s для правила реакции: %s", image.filename, e)
+                await respond(interaction, "Не удалось скачать картинку, попробуйте ещё раз.")
                 return
 
-        rule = {"id": uuid.uuid4().hex[:6], "word": word, "emoji": emoji, "media": file, "match": match}
+        rule = {"id": uuid.uuid4().hex[:6], "word": word, "emojis": emojis, "media": file, "match": match}
         self.reactions.append(rule)
         self.save()
         log.info("Создано правило реакции %s: «%s» → %s (%s), автор %s", rule["id"], word, describe(rule), match, who(interaction.user))
         actions = []
-        if emoji:
-            actions.append(f"ставить {emoji}")
+        if emojis:
+            actions.append(f"ставить {' '.join(emojis)}" + (" (по порядку)" if len(emojis) > 1 else ""))
         if file:
             actions.append(f"отвечать картинкой `{file}`")
-        await interaction.response.send_message(
-            f"Готово! На сообщения со словом **{word}** бот будет {' и '.join(actions)}. ID: `{rule['id']}`",
-            ephemeral=True,
-        )
+        await respond(interaction, f"Готово! На сообщения со словом **{word}** бот будет {' и '.join(actions)}. ID: `{rule['id']}`")
 
     @app_commands.command(name="list", description="Показать все правила реакций")
     async def list_(self, interaction: discord.Interaction):
@@ -198,7 +206,7 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
             f"`{r['id']}` — **{r['word']}** → {describe(r)} ({MATCH_NAMES[r['match']]})"
             for r in sorted(self.reactions, key=lambda r: r["word"])
         ]
-        await interaction.response.send_message("\n".join(lines), ephemeral=True)
+        await respond_lines(interaction, lines)
 
     async def id_autocomplete(self, interaction: discord.Interaction, current: str):
         current = current.lower()

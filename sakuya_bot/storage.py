@@ -33,6 +33,26 @@ def is_image(attachment: discord.Attachment) -> bool:
     return Path(attachment.filename).suffix.lower() in IMG_EXTENSIONS
 
 
+def size_problem(size: int, guild: discord.Guild) -> str | None:
+    """Влезет ли файл в лимит отправки на этом сервере (зависит от бустов); None — влезет, иначе текст ответа."""
+    if size > guild.filesize_limit:
+        return f"Файл слишком большой: на этом сервере бот может отправлять до {guild.filesize_limit // 2**20} МБ."
+    return None
+
+
+def image_problem(image: discord.Attachment | None, file: str | None, guild: discord.Guild) -> str | None:
+    """Проверка картинки для /schedule и /reaction: загруженная (image) или из папки img (file)."""
+    if image:
+        if not is_image(image):
+            return "Это не картинка (подходят PNG, JPG, GIF, WEBP)."
+        return size_problem(image.size, guild)
+    if file:
+        if file not in list_images():
+            return f"Файл `{file}` не найден в папке img."
+        return size_problem((IMG_DIR / file).stat().st_size, guild)
+    return None
+
+
 async def save_image(attachment: discord.Attachment) -> str:
     """Сохраняет вложение в img/ под уникальным именем и возвращает это имя.
 
