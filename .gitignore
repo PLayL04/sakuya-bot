@@ -11,5 +11,5 @@ data/
 img/
 logs/
 /quotes/
-tests/
+.pytest_cache/
 *.tmp
