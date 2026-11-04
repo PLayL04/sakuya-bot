@@ -23,13 +23,46 @@ from .settings import current
 from .settings.cog import SettingsCog
 from .storage import remove_unused_images
 
+RESPONSE_WINDOW = 3.0  # секунд: столько Discord ждёт первого ответа на команду, потом — «Приложение не отвечает»
+SLOW_DELIVERY = 2.0  # команда дошла до бота позже — пишем в лог: на ответ почти не осталось времени
+UNKNOWN_INTERACTION = 10062  # код ошибки Discord: ответили позже RESPONSE_WINDOW
+
+
+def seconds_since_created(interaction: discord.Interaction) -> float:
+    """Сколько секунд прошло с момента вызова команды. Время вызова сообщает Discord (в ID взаимодействия),
+    а «сейчас» — по часам сервера: если они сбиты (проверить — timedatectl), цифры будут неточными."""
+    return (discord.utils.utcnow() - interaction.created_at).total_seconds()
+
+
+class SakuyaTree(app_commands.CommandTree):
+    """Дерево слэш-команд с замером: когда команда дошла до бота (для разбора «Приложение не отвечает»)."""
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        # вызывается первым делом для каждой команды, ещё до проверок доступа и самой команды
+        delivered = seconds_since_created(interaction)
+        interaction.extras["delivered_after"] = delivered
+        if delivered > SLOW_DELIVERY and interaction.type == discord.InteractionType.application_command:
+            log.warning("Команда /%s от %s дошла до бота только через %.1f с после вызова (Discord ждёт ответ %.0f с)",
+                        command_name(interaction), who(interaction.user), delivered, RESPONSE_WINDOW)
+        return True
+
+
+def command_name(interaction: discord.Interaction) -> str:
+    return interaction.command.qualified_name if interaction.command else "?"
+
+
+def is_expired(error: BaseException) -> bool:
+    """Discord уже не принимает ответ: с вызова команды прошло больше RESPONSE_WINDOW секунд."""
+    return isinstance(error, discord.NotFound) and error.code == UNKNOWN_INTERACTION
+
 
 class SakuyaBot(commands.Bot):
     def __init__(self):
         intents = discord.Intents.default()
         # нужно, чтобы видеть текст сообщений; включается в Developer Portal -> Bot -> Message Content Intent
         intents.message_content = True
-        super().__init__(command_prefix="!", intents=intents, case_insensitive=True, help_command=None)
+        super().__init__(command_prefix="!", intents=intents, case_insensitive=True, help_command=None,
+                         tree_cls=SakuyaTree)
         self.schedule_cog = ScheduleCog(self)
         self.reaction_cog = ReactionCog(self)
 
@@ -81,17 +114,27 @@ class SakuyaBot(commands.Bot):
 
     async def on_app_command_completion(self, interaction: discord.Interaction, command: app_commands.Command):
         params = ", ".join(f"{k}={getattr(v, 'filename', v)}" for k, v in interaction.namespace)
-        log.info("Команда /%s от %s в #%s%s", command.qualified_name, who(interaction.user), interaction.channel,
-                 f" ({params})" if params else "")
+        delivered = interaction.extras.get("delivered_after")
+        log.info("Команда /%s от %s в #%s%s%s", command.qualified_name, who(interaction.user), interaction.channel,
+                 f" ({params})" if params else "", f", дошла через {delivered:.1f} с" if delivered is not None else "")
 
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
-        name = interaction.command.qualified_name if interaction.command else "?"
+        name = command_name(interaction)
+        original = getattr(error, "original", error)
+        if is_expired(original):
+            # ответ опоздал: сообщить участнику уже нельзя, а трассировка тут ничего не скажет. По двум временам
+            # видно, кто виноват: дошла поздно — задержка доставки у Discord, дошла вовремя — медленно ушёл ответ
+            delivered = interaction.extras.get("delivered_after")
+            log.warning("Discord не дождался ответа на /%s от %s: команда дошла до бота через %s после вызова, "
+                        "ответ отклонён через %.1f с (Discord ждёт %.0f с)", name, who(interaction.user),
+                        f"{delivered:.1f} с" if delivered is not None else "? с",
+                        seconds_since_created(interaction), RESPONSE_WINDOW)
+            return
         if isinstance(error, app_commands.CheckFailure):
             log.warning("Отказано в доступе: /%s от %s (нет ни одной из ролей %s и права «Управлять сервером»)",
                         name, who(interaction.user), ", ".join(map(str, sorted(current().admin_roles))) or "—")
             text = "Эта команда доступна только участникам с ролью управления ботом или правом «Управлять сервером»."
         else:
-            original = getattr(error, "original", error)
             log.error("Ошибка команды /%s от %s: %s", name, who(interaction.user), original, exc_info=original)
             # иначе у модератора просто повиснет «Приложение не отвечает»
             text = f"Что-то пошло не так ({type(original).__name__}). Подробности — в логе бота, попробуйте ещё раз позже."

@@ -49,6 +49,9 @@ class FakeInteraction:
         self.client.user.name = "Sakuya"
         self.type = discord.InteractionType.application_command
         self.command = mock.Mock(qualified_name="test")
+        self.created_at = discord.utils.utcnow()  # когда команду вызвали (у настоящего — из ID взаимодействия)
+        self.extras = {}
+        self.namespace = []
         self.replies = []
         self.response = FakeResponse(self)
         self.followup = FakeFollowup(self)
