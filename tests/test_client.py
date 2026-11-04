@@ -29,7 +29,7 @@ async def test_commands_are_registered(started):
     menus = [c.name for c in started.tree.get_commands(guild=GUILD, type=discord.AppCommandType.message)]
     assert menus == ["Кофе", "Пиво", "Музей", "Взрыв", "Сжатие"]  # Discord разрешает не больше 5
     prefix = {c.name for c in started.commands}
-    assert {"кофе", "пиво", "explode", "implode", "музей", "цитата", "помощь"} == prefix
+    assert {"кофе", "пиво", "explode", "implode", "музей", "цитата", "анекдот", "помощь"} == prefix
 
 
 @pytest.mark.parametrize("alias, name", [("взрыв", "explode"), ("сжатие", "implode"), ("латте", "кофе"),

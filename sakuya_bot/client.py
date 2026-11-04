@@ -11,6 +11,7 @@ from .distort.cog import DistortCog
 from .help import HelpCog
 from .imaging.command import COOLDOWN_TEXT
 from .imaging.sources import clear_downloads
+from .jokes.cog import JokeCog
 from .logs import log, who
 from .menus import MenuCog
 from .museum.cog import MuseumCog
@@ -78,6 +79,7 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(DistortCog(self))
         await self.add_cog(MuseumCog(self))
         await self.add_cog(QuoteCog(self))
+        await self.add_cog(JokeCog(self))
         await self.add_cog(RhymeCog(self))
         # после команд с картинками: меню берёт их кулдауны, а /help — их алиасы
         await self.add_cog(MenuCog(self))
