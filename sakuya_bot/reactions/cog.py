@@ -10,21 +10,21 @@ from discord.ext import commands
 from ..checks import AdminOnly
 from ..config import DATA_DIR, IMG_DIR
 from ..logs import log, who
+from ..settings import current
 from ..storage import is_image, list_images, load_json, save_image, save_json
 from .matching import MATCH_NAMES, rule_matches
 
 REACTIONS_FILE = DATA_DIR / "reactions.json"
-PING_EMOJI_NAME = "MadelineAlo"  # эмодзи сервера, которым бот отвечает на пинг
 PING_EMOJI_FALLBACK = "💩"
-MEDIA_COOLDOWN = 60  # секунд: одно правило отвечает картинкой в канале не чаще этого (0 — без ограничения)
 MAX_FILES = 10  # больше вложений в одном сообщении Discord не принимает
 
 
 def ping_emoji(guild: discord.Guild) -> str:
-    """Эмодзи сервера ищем по имени, чтобы не хранить его ID; если его нет — запасной 💩."""
-    emoji = discord.utils.get(guild.emojis, name=PING_EMOJI_NAME)
+    """Эмодзи сервера (reactions.ping_emoji в настройках) ищем по имени, чтобы не хранить его ID; если его нет — запасной 💩."""
+    name = current().ping_emoji
+    emoji = discord.utils.get(guild.emojis, name=name)
     if emoji is None:
-        log.warning("Эмодзи :%s: не найден на сервере, на пинг ставлю %s", PING_EMOJI_NAME, PING_EMOJI_FALLBACK)
+        log.warning("Эмодзи :%s: не найден на сервере, на пинг ставлю %s", name, PING_EMOJI_FALLBACK)
         return PING_EMOJI_FALLBACK
     return str(emoji)  # «<:MadelineAlo:id>» или «<a:MadelineAlo:id>» для анимированного
 
@@ -64,6 +64,7 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
             emojis[ping_emoji(message.guild)] = "пинг бота"
         media = {}  # файл -> правило (для лога)
         now = time.monotonic()
+        cooldown = current().image_reply_cooldown  # одно правило отвечает картинкой в канале не чаще (0 — без ограничения)
         for rule in self.reactions:
             emoji, file = rule.get("emoji"), rule.get("media")
             new_emoji = emoji and emoji not in emojis
@@ -74,11 +75,11 @@ class ReactionCog(AdminOnly, commands.GroupCog, group_name="reaction",
                 emojis[emoji] = f"слово «{rule['word']}» (правило {rule['id']})"
             if new_file:
                 key = (rule["id"], message.channel.id)
-                if now - self.last_media.get(key, -MEDIA_COOLDOWN) >= MEDIA_COOLDOWN:
+                if key not in self.last_media or now - self.last_media[key] >= cooldown:
                     self.last_media[key] = now
                     media[file] = rule
                 else:
-                    log.info("Правило %s: картинку в #%s не отправляю — кулдаун %d с", rule["id"], message.channel, MEDIA_COOLDOWN)
+                    log.info("Правило %s: картинку в #%s не отправляю — кулдаун %d с", rule["id"], message.channel, cooldown)
         for emoji, reason in emojis.items():
             try:
                 await message.add_reaction(discord.PartialEmoji.from_str(emoji))

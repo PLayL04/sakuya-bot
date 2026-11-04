@@ -10,8 +10,9 @@ from discord import app_commands
 from discord.ext import commands, tasks
 
 from ..checks import AdminOnly
-from ..config import DATA_DIR, IMG_DIR, TZ
+from ..config import DATA_DIR, IMG_DIR
 from ..logs import log, who
+from ..settings import current
 from ..storage import is_image, list_images, load_json, save_image, save_json
 from .rules import DATE_RE, TIME_RE, WEEKDAYS, describe_schedule, due_occurrence, last_passed_day, missed_once
 
@@ -69,7 +70,7 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
 
     @tasks.loop(seconds=20)
     async def scheduler(self):
-        now = datetime.now(TZ)
+        now = datetime.now(current().tz)
         changed = False
         for sched in list(self.schedules):
             # last_sent — день, за который расписание уже отправлено (или отправить не получилось): защита от повторов
@@ -120,7 +121,7 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             return
         time = f"{int(m[1]):02d}:{m[2]}"
 
-        now = datetime.now(TZ)
+        now = datetime.now(current().tz)
         if extra["kind"] == "once" and (extra["date"], time) <= (now.date().isoformat(), now.strftime("%H:%M")):
             await interaction.response.send_message("Эта дата и время уже прошли.", ephemeral=True)
             return
@@ -153,7 +154,7 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
         when = describe_schedule(sched)
         log.info("Создано расписание %s: %s в #%s, картинка %s (автор %s)", sched["id"], when, channel, file, who(interaction.user))
         await interaction.response.send_message(
-            f"Готово! {when[0].upper() + when[1:]} ({TZ.key}) в {channel.mention} будет отправляться `{file}`. ID: `{sched['id']}`",
+            f"Готово! {when[0].upper() + when[1:]} ({current().timezone}) в {channel.mention} будет отправляться `{file}`. ID: `{sched['id']}`",
             ephemeral=True,
         )
 
@@ -268,7 +269,7 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             + (f" — «{s['message']}»" if s.get("message") else "")
             for s in sorted(self.schedules, key=lambda s: s["time"])
         ]
-        await interaction.response.send_message(f"Часовой пояс: {TZ.key}\n" + "\n".join(lines), ephemeral=True)
+        await interaction.response.send_message(f"Часовой пояс: {current().timezone}\n" + "\n".join(lines), ephemeral=True)
 
     async def id_autocomplete(self, interaction: discord.Interaction, current: str):
         return [

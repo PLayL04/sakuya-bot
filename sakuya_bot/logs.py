@@ -7,15 +7,16 @@ from logging.handlers import RotatingFileHandler
 
 import discord
 
-from .config import LOG_DIR, TZ
+from .config import LOG_DIR
+from .settings import current
 
 log = logging.getLogger("sakuya-bot")
 
 
 def setup_logging() -> None:
-    """Логи в консоль и в logs/sakuya-bot.log (до 4 файлов по 5 МБ). Время — в часовом поясе TIMEZONE."""
+    """Логи в консоль и в logs/sakuya-bot.log (до 4 файлов по 5 МБ). Время — в часовом поясе из настроек."""
     formatter = logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s", "%Y-%m-%d %H:%M:%S")
-    formatter.converter = lambda ts: datetime.fromtimestamp(ts, TZ).timetuple()
+    formatter.converter = lambda ts: datetime.fromtimestamp(ts, current().tz).timetuple()
     # иначе на Windows вывод в терминал IDE или в файл идёт в cp1251 и русский текст/эмодзи ломаются
     sys.stdout.reconfigure(encoding="utf-8")
     console = logging.StreamHandler(sys.stdout)

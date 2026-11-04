@@ -5,8 +5,8 @@ import asyncio
 import discord
 from discord.ext import commands
 
-from ..config import FUN_CHANNEL_IDS, QUOTES_DIR
-from ..imaging.command import channel_allowed
+from ..config import QUOTES_DIR
+from ..imaging.command import fun_command_checks
 from ..logs import log, who
 from .picker import QuoteLibrary, format_quote
 
@@ -26,9 +26,7 @@ class QuoteCog(commands.Cog):
             log.warning("В %s нет текстов (*.txt) — !цитата будет отвечать, что цитат нет", QUOTES_DIR)
 
     @commands.command(name="цитата", aliases=["quote"])
-    @commands.guild_only()
-    @commands.check(lambda ctx: channel_allowed(ctx.channel, FUN_CHANNEL_IDS))  # проверки идут до кулдауна, так что он не тратится
-    @commands.cooldown(1, 15, commands.BucketType.user)
+    @fun_command_checks  # только на сервере, в каналах и с кулдауном из настроек (/settings)
     async def quote(self, ctx: commands.Context):
         """Отправляет случайную цитату из текстов в папке quotes/: от одного предложения до нескольких абзацев."""
         quote = await asyncio.to_thread(self.library.pick)

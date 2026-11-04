@@ -2,8 +2,7 @@
 
 from discord.ext import commands
 
-from ..config import FUN_CHANNEL_IDS
-from ..imaging.command import channel_allowed, preload_template, reply_with_effect
+from ..imaging.command import fun_command_checks, preload_template, reply_with_effect
 from . import effect
 
 
@@ -13,12 +12,10 @@ class MuseumCog(commands.Cog):
         self.bot = bot
 
     async def cog_load(self):
-        await preload_template(effect.EFFECT, FUN_CHANNEL_IDS)
+        await preload_template(effect.EFFECT)
 
     @commands.command(name="музей", aliases=["museum"])
-    @commands.guild_only()
-    @commands.check(lambda ctx: channel_allowed(ctx.channel, FUN_CHANNEL_IDS))  # проверки идут до кулдауна, так что он не тратится
-    @commands.cooldown(1, 15, commands.BucketType.user)
+    @fun_command_checks  # только на сервере, в каналах и с кулдауном из настроек (/settings)
     async def museum(self, ctx: commands.Context):
         """Вешает картинку в раму на стене музея целиком, без обрезки: из ответа, из вложения или последнюю выше. Гифки и видео — анимацией."""
         await reply_with_effect(ctx, effect.EFFECT)

@@ -9,6 +9,7 @@ import discord
 from discord.ext import commands
 
 from ..logs import log, who
+from ..settings import current
 from .effect import ImageEffect, run_effect, warm_up
 from .sources import download_image, find_image
 
@@ -18,22 +19,40 @@ DEFAULT_UPLOAD_LIMIT = 10 * 1024 * 1024  # лимит файла в Discord бе
 _processing = asyncio.Semaphore(1)
 
 
-def channel_allowed(channel: discord.abc.Messageable, channel_ids: set[int]) -> bool:
+def channel_allowed(channel: discord.abc.Messageable, channel_ids: frozenset[int] | set[int]) -> bool:
     """Разрешена ли команда в канале. Пустой список — везде. Ветки (треды) наследуют разрешение родительского канала."""
     if not channel_ids:
         return True
     return channel.id in channel_ids or getattr(channel, "parent_id", None) in channel_ids
 
 
-async def preload_template(effect: ImageEffect, channel_ids: set[int]) -> None:
+def in_fun_channel(ctx: commands.Context) -> bool:
+    """Проверка для развлекательных команд: канал из настроек (fun.channels). Проверки идут до кулдауна — он не тратится."""
+    return channel_allowed(ctx.channel, current().fun_channels)
+
+
+def fun_cooldown(ctx: commands.Context) -> commands.Cooldown | None:
+    """Кулдаун развлекательных команд из настроек (fun.cooldown): раз в N секунд на участника, 0 — без ограничения.
+    Читается при каждом вызове, так что новое значение действует сразу после /settings upload."""
+    seconds = current().fun_cooldown
+    return commands.Cooldown(1, seconds) if seconds else None
+
+
+# декораторы для развлекательных команд: @fun_command_checks над функцией команды
+def fun_command_checks(func):
+    func = commands.dynamic_cooldown(fun_cooldown, commands.BucketType.user)(func)
+    func = commands.check(in_fun_channel)(func)
+    return commands.guild_only()(func)
+
+
+async def preload_template(effect: ImageEffect) -> None:
     """Готовит шаблон заранее: ошибка видна сразу при запуске, а первый вызов команды не тормозит."""
-    where = f"в каналах {', '.join(map(str, sorted(channel_ids)))}" if channel_ids else "во всех каналах"
     if effect.template_file is None:
-        log.info("Команда !%s без шаблона готова; работает %s", effect.name, where)
+        log.info("Команда !%s без шаблона готова", effect.name)
         return
     try:
         await asyncio.to_thread(warm_up, effect)
-        log.info("Шаблон для !%s загружен: %s; команда работает %s", effect.name, effect.template_file, where)
+        log.info("Шаблон для !%s загружен: %s", effect.name, effect.template_file)
     except Exception as e:
         log.error("Шаблон для !%s не загружен, команда работать не будет: %s", effect.name, e)
 

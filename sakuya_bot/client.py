@@ -6,13 +6,15 @@ from discord.ext import commands, tasks
 
 from .beer.cog import BeerCog
 from .coffee.cog import CoffeeCog
-from .config import ADMIN_ROLE_IDS, GUILD, GUILD_ID
+from .config import GUILD, GUILD_ID
 from .distort.cog import DistortCog
 from .logs import log, who
 from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
 from .reactions.cog import ReactionCog
 from .schedules.cog import ScheduleCog
+from .settings import current
+from .settings.cog import SettingsCog
 
 
 # что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
@@ -33,7 +35,9 @@ class SakuyaBot(commands.Bot):
 
     async def setup_hook(self):
         self.tree.on_error = self.on_tree_error
-        # каждый ког — отдельная функция бота со своими командами, данными и событиями
+        # каждый ког — отдельная функция бота со своими командами, данными и событиями;
+        # настройки — первыми: остальные коги читают их уже при загрузке
+        await self.add_cog(SettingsCog(self), guild=GUILD)
         await self.add_cog(self.schedule_cog, guild=GUILD)
         await self.add_cog(self.reaction_cog, guild=GUILD)
         await self.add_cog(CoffeeCog(self))
@@ -66,9 +70,11 @@ class SakuyaBot(commands.Bot):
     async def on_tree_error(self, interaction: discord.Interaction, error: app_commands.AppCommandError):
         if isinstance(error, app_commands.CheckFailure):
             name = interaction.command.qualified_name if interaction.command else "?"
-            log.warning("Отказано в доступе: /%s от %s (нет ни одной из ролей %s)", name, who(interaction.user),
-                        ", ".join(map(str, sorted(ADMIN_ROLE_IDS))))
-            await interaction.response.send_message("Эта команда доступна только участникам с ролью управления ботом.", ephemeral=True)
+            log.warning("Отказано в доступе: /%s от %s (нет ни одной из ролей %s и права «Управлять сервером»)",
+                        name, who(interaction.user), ", ".join(map(str, sorted(current().admin_roles))) or "—")
+            await interaction.response.send_message(
+                "Эта команда доступна только участникам с ролью управления ботом или правом «Управлять сервером».",
+                ephemeral=True)
             return
         await app_commands.CommandTree.on_error(self.tree, interaction, error)
 
