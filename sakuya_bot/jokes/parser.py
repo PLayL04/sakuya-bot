@@ -52,8 +52,7 @@ class _JokePage(HTMLParser):
         if self._depth and tag == "div":
             self._depth -= 1
             if not self._depth:
-                lines = [" ".join(line.split()) for line in "".join(self._parts).split("\n")]
-                text = "\n".join(lines).strip()
+                text = tidy("".join(self._parts))
                 if text:
                     self.jokes.append(Joke(self._id, text))
                 self._id = None
@@ -61,6 +60,39 @@ class _JokePage(HTMLParser):
     def handle_data(self, data):
         if self._depth:
             self._parts.append(data)
+
+
+# реплика: дефис или тире в начале строки (с пробелом или без)
+DASH_START = re.compile(r"^[-–—]\s*")
+# новая реплика, приклеенная к концу предыдущей фразы: «прапорщику:- Товарищ», «строит.- Ну-ка»
+GLUED_REPLY = re.compile(r"([.!?…:])\s*[-–—]\s*(?=[«\"„(]?[А-ЯЁA-Z0-9])")
+# дефис, окружённый пробелами, — это тире: «Ну что я - даун?»
+SPACED_HYPHEN = re.compile(r"(?<=\s)[-–](?=\s)")
+
+
+def _starts_line(line: str) -> bool:
+    """Начинает ли строка новую фразу или реплику (тогда перенос перед ней — настоящий): с заглавной буквы или цифры,
+    в том числе после тире реплики. Строка со строчной буквы — продолжение предложения с прошлой строки."""
+    first = DASH_START.sub("", line).lstrip("«\"„'(")[:1]
+    return first.isupper() or first.isdigit()
+
+
+def tidy(raw: str) -> str:
+    """Чистит текст анекдота для Discord. На сайте много старых текстов, свёрстанных с переносами посреди предложений
+    («в казарме<br>трахают табуретку») и без переносов перед репликами («прапорщику:- Товарищ»). Поэтому:
+    переносы посреди предложения склеиваются, каждая реплика начинается с новой строки, а дефис реплики меняется
+    на тире «—» — строку с «- » в начале Discord показал бы пунктом списка."""
+    lines = [" ".join(line.split()) for line in raw.split("\n")]
+    lines = [line for line in lines if line]
+    merged: list[str] = []
+    for line in lines:
+        if merged and not _starts_line(line):
+            merged[-1] += " " + line
+        else:
+            merged.append(line)
+    text = GLUED_REPLY.sub(r"\1\n— ", "\n".join(merged))
+    text = "\n".join(DASH_START.sub("— ", line) for line in text.split("\n"))
+    return SPACED_HYPHEN.sub("—", text).strip()
 
 
 def parse_jokes(html: str) -> list[Joke]:
@@ -83,4 +115,6 @@ def parse_total(html: str) -> int | None:
 def format_joke(joke: Joke) -> str:
     """Текст анекдота (разметка Discord в нём показывается как есть) и мелкая подпись-ссылка на источник.
     Ссылка в <…>, чтобы Discord не разворачивал под анекдотом превью сайта."""
-    return f"{escape(joke.text)}\n-# [anekdot.ru](<{joke.url}>)"
+    # escape — построчно: разметку строки («1. », «# ») Discord ищет в начале каждой строки, а не только первой
+    text = "\n".join(escape(line) for line in joke.text.split("\n"))
+    return f"{text}\n-# [anekdot.ru](<{joke.url}>)"

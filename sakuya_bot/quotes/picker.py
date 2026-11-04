@@ -29,7 +29,9 @@ SENTENCE_START = re.compile(r"[«“„\"'(\[—–\-\s]*[A-ZА-ЯЁ0-9]")
 # символы разметки Discord, которые в тексте цитаты нужно показать как есть
 MARKDOWN_CHARS = re.compile(r"([\\*_~`|>\[\]])")
 # начало строки, которое Discord принял бы за заголовок, подпись или список
-LINE_MARKUP = re.compile(r"^(#|-#|[-+*] |\d+[.)] )")
+LINE_MARKUP = re.compile(r"^(#|-#|[-+*] )")
+# нумерованный список «1. »: косая черта нужна перед точкой — перед цифрой Discord её не убирает и показал бы «\1.»
+ORDERED_LIST = re.compile(r"^(\d+)([.)] )")
 
 
 @dataclass
@@ -197,7 +199,8 @@ def quote_len(paragraphs: list[list[str]]) -> int:
 def escape(text: str) -> str:
     """Чтобы *, _, ` и прочее из текста показывались как есть, а не превращались в разметку."""
     text = MARKDOWN_CHARS.sub(r"\\\1", text)
-    return LINE_MARKUP.sub(r"\\\1", text)
+    text = LINE_MARKUP.sub(r"\\\1", text)
+    return ORDERED_LIST.sub(r"\1\\\2", text)
 
 
 def format_quote(quote: Quote) -> str:

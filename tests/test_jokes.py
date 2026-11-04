@@ -12,7 +12,7 @@ import pytest
 from sakuya_bot.jokes import cache as jokes_cache
 from sakuya_bot.jokes.cache import JokeCache, JokesUnavailable, NothingFound, normalize_query, search_url
 from sakuya_bot.jokes.cog import UNAVAILABLE_TEXT, JokeCog
-from sakuya_bot.jokes.parser import MAX_JOKE_CHARS, Joke, format_joke, parse_jokes, parse_total
+from sakuya_bot.jokes.parser import MAX_JOKE_CHARS, Joke, format_joke, parse_jokes, parse_total, tidy
 
 
 def topic(joke_id, text_html):
@@ -39,7 +39,7 @@ SAMPLE = page(
 def test_parse_jokes():
     jokes = parse_jokes(SAMPLE)
     assert [j.id for j in jokes] == ["101", "-202"]
-    assert jokes[0].text == 'Первая строка.\n- Реплика "в кавычках", с пробелами.\n- Ответ.'
+    assert jokes[0].text == 'Первая строка.\n— Реплика "в кавычках", с пробелами.\n— Ответ.'
 
 
 def test_page_without_jokes():
@@ -50,6 +50,31 @@ def test_format_joke_escapes_markup_and_links_source():
     text = format_joke(Joke("-202", "Про *звёздочки* и _подчёркивания_"))
     assert text.startswith(r"Про \*звёздочки\* и \_подчёркивания\_")
     assert text.endswith("-# [anekdot.ru](<https://www.anekdot.ru/id/-202/>)")  # <…> — без превью сайта
+
+
+# ---------- оформление: старые тексты с переносами посреди предложений и слипшимися репликами ----------
+
+def test_tidy_hard_wrapped_dialogue():
+    raw = ("Мама зовёт сына:- Петя! Иди обедать, суп\nстынет! Петя прибегает.- Мам, а можно\n"
+           "- без лука? Мама кивает и\nулыбается.- Конечно, - говорит она, - можно.")
+    assert tidy(raw) == ("Мама зовёт сына:\n"
+                         "— Петя! Иди обедать, суп стынет! Петя прибегает.\n"
+                         "— Мам, а можно — без лука? Мама кивает и улыбается.\n"
+                         "— Конечно, — говорит она, — можно.")
+
+
+def test_tidy_keeps_intended_lines():
+    raw = "Встречаются двое.\n- Привет!\n -Здорово.\nСтишок:\nУтро красит\nНежным цветом\n\n2. Второе."
+    assert tidy(raw) == "Встречаются двое.\n— Привет!\n— Здорово.\nСтишок:\nУтро красит\nНежным цветом\n2. Второе."
+
+
+def test_tidy_keeps_hyphenated_words():
+    assert tidy("Ну-ка, кто-нибудь - сюда! Счёт 2-1.") == "Ну-ка, кто-нибудь — сюда! Счёт 2-1."
+
+
+def test_reply_lines_are_not_lists_in_discord():
+    lines = format_joke(Joke("1", "Вопрос:\n— Ответ.\n1. Пункт\n# не заголовок")).split("\n")
+    assert lines[1] == "— Ответ." and lines[2] == r"1\. Пункт" and lines[3] == r"\# не заголовок"
 
 
 # ---------- запас ----------
