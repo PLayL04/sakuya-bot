@@ -21,6 +21,17 @@ def blur(arr: np.ndarray, radius: float) -> np.ndarray:
     return to_float(img.filter(ImageFilter.GaussianBlur(radius)))
 
 
+def bilinear(img: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
+    """Значения картинки в дробных координатах (как Image.resize, но для любых точек)."""
+    h, w = img.shape[:2]
+    xs, ys = np.clip(xs, 0, w - 1.001), np.clip(ys, 0, h - 1.001)
+    x0, y0 = xs.astype(int), ys.astype(int)
+    fx, fy = (xs - x0)[..., None], (ys - y0)[..., None]
+    top = img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx
+    bottom = img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx
+    return top * (1 - fy) + bottom * fy
+
+
 @dataclass(frozen=True, eq=False)
 class Template:
     """Шаблон с вырезом, куда эффект вставляет картинку.

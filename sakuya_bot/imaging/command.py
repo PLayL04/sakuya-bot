@@ -27,10 +27,13 @@ def channel_allowed(channel: discord.abc.Messageable, channel_ids: set[int]) -> 
 
 async def preload_template(effect: ImageEffect, channel_ids: set[int]) -> None:
     """Готовит шаблон заранее: ошибка видна сразу при запуске, а первый вызов команды не тормозит."""
+    where = f"в каналах {', '.join(map(str, sorted(channel_ids)))}" if channel_ids else "во всех каналах"
+    if effect.template_file is None:
+        log.info("Команда !%s без шаблона готова; работает %s", effect.name, where)
+        return
     try:
         await asyncio.to_thread(warm_up, effect)
-        log.info("Шаблон для !%s загружен: %s; команда работает %s", effect.name, effect.template_file,
-                 f"в каналах {', '.join(map(str, sorted(channel_ids)))}" if channel_ids else "во всех каналах")
+        log.info("Шаблон для !%s загружен: %s; команда работает %s", effect.name, effect.template_file, where)
     except Exception as e:
         log.error("Шаблон для !%s не загружен, команда работать не будет: %s", effect.name, e)
 

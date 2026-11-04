@@ -23,7 +23,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageOps
 
 from ..config import TEMPLATE_DIR
 from ..imaging.effect import ImageEffect
-from ..imaging.template import Template, blur, load_template, open_image, to_jpeg
+from ..imaging.template import Template, bilinear, blur, load_template, open_image, to_jpeg
 
 TEMPLATE_FILE = TEMPLATE_DIR / "beer.jpg"
 
@@ -73,17 +73,6 @@ def glass_geometry(mask: np.ndarray, y0: int, y1: int, walls: str = "shaped") ->
     left = np.convolve(np.pad(left, 4, mode="edge"), kernel, mode="valid")
     right = np.convolve(np.pad(right, 4, mode="edge"), kernel, mode="valid")
     return (left + right) / 2, (right - left) / 2, body_end
-
-
-def bilinear(img: np.ndarray, xs: np.ndarray, ys: np.ndarray) -> np.ndarray:
-    """Значения картинки в дробных координатах (как Image.resize, но для любых точек)."""
-    h, w = img.shape[:2]
-    xs, ys = np.clip(xs, 0, w - 1.001), np.clip(ys, 0, h - 1.001)
-    x0, y0 = xs.astype(int), ys.astype(int)
-    fx, fy = (xs - x0)[..., None], (ys - y0)[..., None]
-    top = img[y0, x0] * (1 - fx) + img[y0, x0 + 1] * fx
-    bottom = img[y0 + 1, x0] * (1 - fx) + img[y0 + 1, x0 + 1] * fx
-    return top * (1 - fy) + bottom * fy
 
 
 def draw_bubbles(size: tuple[int, int], center: np.ndarray, radius: np.ndarray, body_end: int,

@@ -7,13 +7,15 @@ from discord.ext import commands, tasks
 from .beer.cog import BeerCog
 from .coffee.cog import CoffeeCog
 from .config import ADMIN_ROLE_IDS, GUILD, GUILD_ID
+from .distort.cog import DistortCog
 from .logs import log, who
 from .reactions.cog import ReactionCog
 from .schedules.cog import ScheduleCog
 
 
 # что отвечать, когда команду вызвали раньше, чем прошёл кулдаун
-COOLDOWN_TEXT = {"кофе": "Кофе ещё варится ☕", "пиво": "Пиво ещё наливается 🍺"}
+COOLDOWN_TEXT = {"кофе": "Кофе ещё варится ☕", "пиво": "Пиво ещё наливается 🍺",
+                 "explode": "Картинка ещё раздувается 💥", "implode": "Картинка ещё сжимается 🌀"}
 
 
 class SakuyaBot(commands.Bot):
@@ -32,6 +34,7 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(self.reaction_cog, guild=GUILD)
         await self.add_cog(CoffeeCog(self))
         await self.add_cog(BeerCog(self))
+        await self.add_cog(DistortCog(self))
         # синхронизация только для своего сервера — команды появляются сразу
         synced = await self.tree.sync(guild=GUILD)
         log.info("Слэш-команды синхронизированы с сервером %s: %s", GUILD_ID, ", ".join(f"/{c.name}" for c in synced))
