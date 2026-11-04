@@ -15,7 +15,8 @@ from .beer.effect import EFFECT as BEER
 from .coffee.latte import EFFECT as COFFEE
 from .config import GUILD
 from .distort.effect import EXPLODE_EFFECT, IMPLODE_EFFECT
-from .imaging.command import (BUSY_TEXT, COOLDOWN_TEXT, apply_effect, channel_allowed, queue_full, result_file)
+from .imaging.command import (BUSY_TEXT, COOLDOWN_TEXT, apply_effect, channel_allowed, queue_full, result_file,
+                              send_failed_text)
 from .imaging.effect import ImageEffect
 from .imaging.sources import image_in_message
 from .logs import log, who
@@ -89,7 +90,15 @@ class MenuCog(commands.Cog):
                 bucket.reset()  # не вышло — попытка не считается
             await interaction.followup.send(result)
             return
-        await interaction.followup.send(file=result_file(result))
+        try:
+            await interaction.followup.send(file=result_file(result))
+        except discord.HTTPException as e:
+            if bucket:
+                bucket.reset()
+            log.warning("Меню «%s» от %s в #%s: результат (%s, %d КБ) не отправлен: %s", command_name, who(user),
+                        interaction.channel, result.info, len(result.data) // 1024, e)
+            await interaction.followup.send(send_failed_text(e))
+            return
         log.info("Меню «%s» от %s в #%s: из сообщения %s (%s), обработка %d мс", command_name, who(user),
                  interaction.channel, message.id, result.info, (time.perf_counter() - started) * 1000)
 

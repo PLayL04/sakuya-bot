@@ -66,9 +66,12 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
     def __init__(self, bot: commands.Bot):
         self.bot = bot
         self.schedules: list[dict] = load_json(SCHEDULES_FILE)
+        self._unsaved = False  # цикл отправки что-то поменял, но сохранить ещё не удалось
+        self._broken: set[str | None] = set()  # расписания с испорченными данными, о которых уже сообщили
 
     def save(self) -> None:
         save_json(SCHEDULES_FILE, self.schedules)
+        self._unsaved = False
 
     async def cog_load(self):
         self.scheduler.start()
@@ -109,31 +112,57 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
 
     @tasks.loop(seconds=20)
     async def scheduler(self):
+        # необработанная ошибка навсегда остановила бы цикл (так устроен tasks.loop) — и ни одно расписание
+        # больше не отправилось бы до перезапуска бота. Поэтому ошибки ловятся здесь, а цикл идёт дальше
+        try:
+            await self.tick()
+        except Exception:
+            log.exception("Сбой в цикле расписаний, попробую снова через 20 секунд")
+
+    async def tick(self) -> None:
         now = datetime.now(current().tz)
-        changed = False
         for sched in list(self.schedules):
-            if sched.get("paused"):
-                continue
-            # last_sent — день, за который расписание уже отправлено (или отправить не получилось): защита от повторов
-            if day := due_occurrence(sched, now, SEND_GRACE):
-                sent = await self.try_send(sched)
-                if sent is None:
-                    continue  # временная ошибка: повторим через 20 секунд, пока не выйдет SEND_GRACE
-                sched["last_sent"] = day
-                changed = True
-                # пока шла отправка, расписание могли удалить командой — тогда удалять уже нечего
-                if sent and sched.get("kind") == "once" and sched in self.schedules:
-                    self.schedules.remove(sched)
-                    log.info("Расписание %s было одноразовым и удалено", sched["id"])
-                    self.bot.cleanup_images()
-            elif missed_once(sched, now, SEND_GRACE):
-                # бот был выключен, или все попытки не удались. Расписание не удаляем молча: оно остаётся в /schedule list
-                log.error("Расписание %s (%s) пропущено: в нужное время отправить не удалось", sched["id"], describe_schedule(sched))
-                sched["last_sent"] = sched["date"]
-                changed = True
-                await notify(self.bot, f"⚠️ Разовое расписание пропущено (бот был недоступен в это время): {summary(sched)}")
-        if changed:
-            self.save()
+            try:
+                await self.process(sched, now)
+            except Exception as e:
+                # испорченная запись (например, после ручной правки schedules.json) не мешает остальным расписаниям;
+                # сообщаем о ней один раз, а не каждые 20 секунд
+                key = sched.get("id") if isinstance(sched, dict) else None
+                if key not in self._broken:
+                    self._broken.add(key)
+                    log.exception("Расписание %s не обработано, пропускаю его", key)
+                    await notify(self.bot, f"⚠️ Расписание `{key}` не обрабатывается: ошибка в его данных "
+                                           f"({type(e).__name__}). Проверьте его в /schedule list или удалите.")
+        if self._unsaved:
+            try:
+                self.save()
+            except OSError:
+                # например, файл на Windows занят антивирусом: изменения в памяти, сохраним на следующем круге
+                log.exception("Не удалось сохранить расписания, попробую снова через 20 секунд")
+
+    async def process(self, sched: dict, now: datetime) -> None:
+        """Один круг цикла для одного расписания: отправить, если пора, или отметить пропущенное разовое."""
+        if sched.get("paused"):
+            return
+        # last_sent — день, за который расписание уже отправлено (или отправить не получилось): защита от повторов
+        if day := due_occurrence(sched, now, SEND_GRACE):
+            sent = await self.try_send(sched)
+            if sent is None:
+                return  # временная ошибка: повторим через 20 секунд, пока не выйдет SEND_GRACE
+            # пока шла отправка, расписание могли изменить командой: её отметку не откатываем назад
+            sched["last_sent"] = max(sched.get("last_sent") or "", day)
+            self._unsaved = True
+            # пока шла отправка, расписание могли удалить командой — тогда удалять уже нечего
+            if sent and sched.get("kind") == "once" and sched in self.schedules:
+                self.schedules.remove(sched)
+                log.info("Расписание %s было одноразовым и удалено", sched["id"])
+                self.bot.cleanup_images()
+        elif missed_once(sched, now, SEND_GRACE):
+            # бот был выключен, или все попытки не удались. Расписание не удаляем молча: оно остаётся в /schedule list
+            log.error("Расписание %s (%s) пропущено: в нужное время отправить не удалось", sched["id"], describe_schedule(sched))
+            sched["last_sent"] = sched["date"]
+            self._unsaved = True
+            await notify(self.bot, f"⚠️ Разовое расписание пропущено (бот был недоступен в это время): {summary(sched)}")
 
     @scheduler.before_loop
     async def before_scheduler(self):

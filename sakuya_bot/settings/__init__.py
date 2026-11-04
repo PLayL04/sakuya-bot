@@ -45,11 +45,21 @@ class SettingsStore:
             return False
         if mtime == self._mtime:
             return False
+        try:
+            text = self.read_text()
+        except OSError as e:
+            # файл занят (редактор как раз сохраняет его) — время не запоминаем, прочитаем на следующей проверке
+            log.warning("Не удалось прочитать файл настроек %s, попробую позже: %s", self.path, e)
+            return False
+        except UnicodeDecodeError:
+            text = None
         self._mtime = mtime
         try:
-            self.settings = parse(self.read_text())
-        except (SettingsError, UnicodeDecodeError) as e:
-            problems = e.problems if isinstance(e, SettingsError) else ["файл не в кодировке UTF-8"]
+            if text is None:
+                raise SettingsError(["файл не в кодировке UTF-8"])
+            self.settings = parse(text)
+        except SettingsError as e:
+            problems = e.problems
             log.error("Файл настроек %s с ошибкой, действуют прежние настройки: %s", self.path, "; ".join(problems))
             return False
         log.info("Настройки перечитаны из %s", self.path)

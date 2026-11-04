@@ -271,3 +271,35 @@ async def test_deleted_while_sending(cog, once, clock, monkeypatch):
     clock("2026-11-04 12:00:10")
     await tick(cog)  # не падает на повторном удалении
     assert cog.schedules == []
+
+
+# ---------- цикл не останавливается из-за ошибок ----------
+
+async def test_broken_schedule_does_not_stop_others(cog, once, clock, channels, log_channel):
+    cog.schedules.insert(0, {"id": "bad", "kind": "daily"})  # нет времени — например, испорчено вручную
+    clock("2026-11-04 12:00:10")
+    await tick(cog)
+    assert channels[5].sent[-1]["content"] == "Привет"  # остальные расписания отправляются
+    notices = [t for t in log_channel.texts if "`bad`" in t]
+    await tick(cog)
+    assert len(notices) == 1 and [t for t in log_channel.texts if "`bad`" in t] == notices  # сообщено один раз
+
+
+async def test_failed_save_is_retried(cog, once, clock, monkeypatch):
+    calls = []
+
+    def flaky_save(path, data):
+        calls.append(path)
+        if len(calls) == 1:
+            raise PermissionError("файл занят антивирусом")
+    monkeypatch.setattr(schedules_cog, "save_json", flaky_save)
+    clock("2026-11-04 12:00:10")
+    await tick(cog)  # не падает
+    assert cog._unsaved and len(calls) == 1
+    await tick(cog)
+    assert not cog._unsaved and len(calls) == 2
+
+
+async def test_scheduler_survives_any_error(cog, monkeypatch):
+    monkeypatch.setattr(cog, "tick", mock.AsyncMock(side_effect=RuntimeError("сбой")))
+    await tick(cog)  # tasks.loop остановился бы навсегда, если бы ошибка вылетела наружу

@@ -17,13 +17,17 @@ from unittest import mock  # noqa: E402
 import discord  # noqa: E402
 import pytest  # noqa: E402
 
+import aiohttp  # noqa: E402
+
+import sakuya_bot.imaging.command as command  # noqa: E402
+import sakuya_bot.imaging.sources as sources  # noqa: E402
 import sakuya_bot.reactions.cog as reactions_cog  # noqa: E402
 import sakuya_bot.schedules.cog as schedules_cog  # noqa: E402
 import sakuya_bot.storage as storage  # noqa: E402
 from sakuya_bot.settings import STORE  # noqa: E402
 from sakuya_bot.settings.model import Settings  # noqa: E402
 
-from fakes import LOG_CHANNEL_ID, FakeChannel  # noqa: E402
+from fakes import LOG_CHANNEL_ID, WEB, FakeChannel  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -39,7 +43,28 @@ def isolated(tmp_path, monkeypatch):
     monkeypatch.setattr(STORE, "path", tmp_path / "settings.toml")
     monkeypatch.setattr(STORE, "settings", Settings())
     monkeypatch.setattr(STORE, "_mtime", None)
+    monkeypatch.setattr(sources, "DOWNLOAD_DIR", tmp_path / "downloads")
+    monkeypatch.setattr(sources, "fetch", fake_fetch)
+    # очередь картинок — своя на каждый тест: семафор asyncio привязывается к циклу событий, а у каждого теста он свой
+    monkeypatch.setattr(command, "_processing", asyncio.Semaphore(1))
+    monkeypatch.setattr(command, "_downloads", asyncio.Semaphore(command.MAX_DOWNLOADS))
+    monkeypatch.setattr(command, "_pending", 0)
+    monkeypatch.setattr(command, "_downloading", 0)
     return tmp_path
+
+
+async def fake_fetch(url, dest):
+    """Скачивание без сети: содержимое берётся из fakes.WEB (туда его кладёт image_attachment)."""
+    found = WEB.get(url, aiohttp.ClientConnectionError(f"нет такого адреса в тесте: {url}"))
+    if isinstance(found, BaseException):
+        raise found
+    dest.write_bytes(found)
+
+
+@pytest.fixture
+def downloads(isolated):
+    """Временные файлы скачивания — должны исчезать после каждой команды."""
+    return lambda: sorted((isolated / "downloads").glob("*")) if (isolated / "downloads").exists() else []
 
 
 @pytest.fixture

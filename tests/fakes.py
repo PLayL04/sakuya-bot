@@ -172,11 +172,18 @@ async def call(command, cog, interaction=None, **params) -> FakeInteraction:
     return interaction
 
 
+_attachment_ids = iter(range(1, 10**9))
+# «интернет» для тестов: адрес -> содержимое файла или исключение. Скачивание (sources.fetch) в тестах берёт отсюда
+WEB: dict[str, bytes | BaseException] = {}
+
+
 def image_attachment(data: bytes, name="pic.png", content_type="image/png"):
     """Настоящее (для isinstance) вложение Discord с картинкой — как в сообщении, по которому нажали ПКМ."""
     a = mock.MagicMock(spec=discord.Attachment)
-    a.filename, a.content_type, a.size, a.url = name, content_type, len(data), f"https://cdn/{name}"
+    a.filename, a.content_type, a.size = name, content_type, len(data)
+    a.url = f"https://cdn/{next(_attachment_ids)}/{name}"
     a.read = mock.AsyncMock(return_value=data)
+    WEB[a.url] = data
     return a
 
 

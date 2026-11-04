@@ -62,6 +62,13 @@ class SettingsCog(AdminOnly, commands.GroupCog, group_name="settings",
 
     @tasks.loop(seconds=30)
     async def watch_file(self):
+        # необработанная ошибка навсегда остановила бы цикл (так устроен tasks.loop) — ловим её здесь
+        try:
+            await self.check_file()
+        except Exception:
+            log.exception("Сбой при проверке файла настроек, попробую снова через 30 секунд")
+
+    async def check_file(self) -> None:
         # файл можно поправить и прямо на сервере (VPS): изменения подхватываются без перезапуска бота
         old = current()
         if STORE.reload_if_changed():

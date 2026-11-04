@@ -35,6 +35,7 @@ IMG_DIR = BASE_DIR / "img"
 DATA_DIR = BASE_DIR / "data"
 LOG_DIR = BASE_DIR / "logs"
 TEMPLATE_DIR = BASE_DIR / "template"
+DOWNLOAD_DIR = BASE_DIR / "tmp"  # картинки и видео для команд с картинками: лежат тут только пока обрабатываются
 # тексты для !цитата (*.txt); можно указать другую папку в QUOTES_DIR в .env
 QUOTES_DIR = Path(os.getenv("QUOTES_DIR") or BASE_DIR / "quotes")
 IMG_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}

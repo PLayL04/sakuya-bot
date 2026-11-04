@@ -10,6 +10,7 @@ from .config import GUILD, GUILD_ID
 from .distort.cog import DistortCog
 from .help import HelpCog
 from .imaging.command import COOLDOWN_TEXT
+from .imaging.sources import clear_downloads
 from .logs import log, who
 from .menus import MenuCog
 from .museum.cog import MuseumCog
@@ -50,13 +51,19 @@ class SakuyaBot(commands.Bot):
         synced = await self.tree.sync(guild=GUILD)
         log.info("Слэш-команды синхронизированы с сервером %s: %s", GUILD_ID, ", ".join(f"/{c.name}" for c in synced))
         self.cleanup_images()  # картинки, оставшиеся от сбоя посреди команды
+        clear_downloads()  # и скачанные для команд с картинками
         self.heartbeat.start()
 
     def cleanup_images(self) -> None:
-        """Удаляет из img/ загруженные через бота картинки, которые больше не нужны ни одному правилу и расписанию."""
-        in_use = {s["image"] for s in self.schedule_cog.schedules}
-        in_use |= {r["media"] for r in self.reaction_cog.reactions if r.get("media")}
-        remove_unused_images(in_use)
+        """Удаляет из img/ загруженные через бота картинки, которые больше не нужны ни одному правилу и расписанию.
+        Сбой уборки (файл занят, нет прав, испорчен uploads.json) не мешает команде или циклу, которые её вызвали:
+        ненужная картинка просто удалится в следующий раз."""
+        try:
+            in_use = {s.get("image") for s in self.schedule_cog.schedules}
+            in_use |= {r["media"] for r in self.reaction_cog.reactions if r.get("media")}
+            remove_unused_images(in_use)
+        except Exception:
+            log.exception("Не удалось убрать неиспользуемые картинки из img/")
 
     def stats(self) -> str:
         return f"расписаний: {len(self.schedule_cog.schedules)}, правил реакций: {len(self.reaction_cog.reactions)}"

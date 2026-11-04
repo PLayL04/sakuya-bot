@@ -131,3 +131,43 @@ def test_huge_picture_is_rejected(monkeypatch):
     monkeypatch.setattr(media, "MAX_PIXELS", 1000)
     with pytest.raises(ValueError, match="слишком большая"):
         media.read_media(png(), keep_alpha=False)
+
+
+# ---------- уменьшение исходника перед обработкой ----------
+
+def jpeg(size) -> bytes:
+    buf = io.BytesIO()
+    Image.new("RGB", size, (90, 140, 200)).save(buf, "JPEG")
+    return buf.getvalue()
+
+
+def test_large_picture_is_shrunk_before_effect():
+    m = media.read_media(png((3000, 1000)), keep_alpha=False)
+    assert m.frames[0].size == (media.SOURCE_SIDE, round(media.SOURCE_SIDE / 3))
+
+
+def test_huge_jpeg_is_decoded_shrunk(monkeypatch):
+    """JPEG больше лимита открывается: он уменьшается уже при декодировании. PNG того же размера — нет."""
+    monkeypatch.setattr(media, "MAX_PIXELS", 100_000)
+    monkeypatch.setattr(media, "SOURCE_SIDE", 150)
+    m = media.read_media(jpeg((1200, 800)), keep_alpha=False)
+    assert max(m.frames[0].size) == 150
+    with pytest.raises(ValueError, match="слишком большая"):
+        media.read_media(png((1200, 800)), keep_alpha=False)
+
+
+def test_media_is_read_from_file(tmp_path):
+    path = tmp_path / "anim.tmp"
+    path.write_bytes(gif(frames=5))
+    assert len(media.read_media(path, keep_alpha=False).frames) == 5
+    path.unlink()  # файл закрыт после чтения — на Windows иначе не удалить
+
+
+@pytest.mark.slow
+def test_large_video_frames_are_shrunk(tmp_path):
+    path = tmp_path / "video.tmp"
+    path.write_bytes(video(seconds=1, size=(1600, 900)))
+    m = media.read_media(path, keep_alpha=False)
+    assert m.source == "видео" and m.frames[0].size == (media.FRAME_SIDE, 405)
+    result = run_effect(EXPLODE_EFFECT, path, LIMIT)
+    assert result.filename == "explode.gif"

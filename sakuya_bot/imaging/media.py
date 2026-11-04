@@ -1,8 +1,15 @@
-"""Анимации: кадры из GIF / анимированных PNG и WebP / видео, и сборка результата в GIF под лимит размера файла."""
+"""Чтение исходника (картинка, анимация, видео) с уменьшением до разумного размера, и сборка результата в GIF
+под лимит размера файла.
+
+Файл может быть любого размера: до обработки эффектом всё сжимается — картинка до SOURCE_SIDE, кадры анимации
+и видео до FRAME_SIDE, из анимации и видео берётся только начало. JPEG и видео уменьшаются уже при декодировании,
+поэтому и огромное фото с телефона, и видео в 4K читаются быстро и без большого расхода памяти."""
 
 import io
+import warnings
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -10,9 +17,17 @@ from .template import MAX_PIXELS, flatten
 
 MAX_SECONDS = 6.0  # из анимации или видео берём только начало
 MAX_FPS = 15  # больше кадров в секунду не нужно: GIF всё равно не показывает плавнее, а обработка дольше
+SOURCE_SIDE = 2048  # картинку сразу уменьшаем до этого размера: эффектам больше не нужно
 FRAME_SIDE = 720  # кадры сразу уменьшаем до этого размера: в бокал или чашку они попадут ещё меньше
 ANIMATION_SIDE = 480  # большая сторона результата-анимации (шаблон уменьшается до неё)
 MIN_SIDE = 160  # меньше этого анимацию не уменьшаем — лучше сократить кадры
+TOO_BIG = ("Картинка слишком большая: больше {mp} мегапикселей даже не открыть без огромного расхода памяти. "
+           "Пришли её в JPEG или уменьшенной.")
+
+# Pillow сам не открывает картинки больше ~179 Мп (защита от «бомб»). Для JPEG это лишнее: он декодируется сразу
+# уменьшенным в 8 раз по стороне, то есть в 64 раза по площади. Остальные форматы проверяет _check_pixels.
+Image.MAX_IMAGE_PIXELS = MAX_PIXELS * 64
+warnings.filterwarnings("ignore", category=Image.DecompressionBombWarning)
 
 
 MAX_SOURCE_FRAMES = 3000  # сколько кадров исходника просматриваем максимум (кадры по 1 мс, видео без меток времени)
@@ -33,37 +48,70 @@ class Media:
         return len(self.frames) > 1
 
 
-def read_media(data: bytes, keep_alpha: bool) -> Media:
-    """Читает картинку, анимацию или видео. Из анимации и видео берутся первые MAX_SECONDS секунд, не чаще MAX_FPS."""
+def read_media(source: bytes | Path, keep_alpha: bool) -> Media:
+    """Читает картинку, анимацию или видео (байты или файл) и сразу уменьшает: картинку до SOURCE_SIDE, кадры до
+    FRAME_SIDE. Из анимации и видео берутся первые MAX_SECONDS секунд, не чаще MAX_FPS.
+    ValueError с текстом для участника — если файл не читается или слишком велик даже для уменьшения."""
+    opened = io.BytesIO(source) if isinstance(source, bytes) else source
     try:
-        img = Image.open(io.BytesIO(data))
+        img = Image.open(opened)
     except UnidentifiedImageError:
-        return _read_video(data, keep_alpha)  # не картинка — пробуем как видео (mp4, webm, mov)
-    except (Image.DecompressionBombError, OSError) as e:
+        return _read_video(source, keep_alpha)  # не картинка — пробуем как видео (mp4, webm, mov)
+    except Image.DecompressionBombError as e:
+        raise ValueError(TOO_BIG.format(mp=MAX_PIXELS // 1_000_000)) from e
+    except OSError as e:
         raise ValueError("Не удалось открыть картинку") from e
+    with img:
+        try:
+            if not getattr(img, "is_animated", False):
+                return Media([_read_still(img, keep_alpha)], [0], "картинка")
+            _check_pixels(img)  # кадр анимации уменьшить при декодировании нельзя — только после
+            return _sample(_animation_frames(img, keep_alpha), img.format or "анимация")
+        except (OSError, EOFError, Image.DecompressionBombError) as e:
+            raise ValueError("Не удалось прочитать картинку или анимацию") from e
+
+
+def _check_pixels(img: Image.Image) -> None:
     if img.width * img.height > MAX_PIXELS:
-        raise ValueError("Картинка слишком большая")
-    try:
-        if not getattr(img, "is_animated", False):
-            img.load()
-            frame = flatten(ImageOps.exif_transpose(img), keep_alpha)
-            return Media([frame], [0], "картинка")
-        return _sample(_animation_frames(img, keep_alpha), img.format or "анимация")
-    except (OSError, EOFError) as e:
-        raise ValueError("Не удалось прочитать анимацию") from e
+        raise ValueError(TOO_BIG.format(mp=MAX_PIXELS // 1_000_000))
+
+
+def _read_still(img: Image.Image, keep_alpha: bool) -> Image.Image:
+    # JPEG декодируется сразу уменьшенным (в 2, 4 или 8 раз) — так открываются даже очень большие фото;
+    # у остальных форматов draft ничего не делает и картинка декодируется целиком
+    img.draft(img.mode, (SOURCE_SIDE, SOURCE_SIDE))
+    _check_pixels(img)
+    img.load()
+    img = ImageOps.exif_transpose(img)
+    if max(img.size) > SOURCE_SIDE:
+        img.thumbnail((SOURCE_SIDE, SOURCE_SIDE), Image.Resampling.LANCZOS, reducing_gap=3.0)
+    return flatten(img, keep_alpha)
 
 
 def _animation_frames(img: Image.Image, keep_alpha: bool) -> Iterator[SourceFrame]:
-    t = 0
-    for i in range(img.n_frames):
-        img.seek(i)
+    # кадры перебираются до конца файла, а не по n_frames: n_frames у GIF пролистывает весь файл,
+    # а из длинной анимации нужно только начало
+    t, i = 0, 0
+    while True:
+        try:
+            img.seek(i)
+        except EOFError:
+            return
         d = img.info.get("duration") or 100
         # convert() даёт полный кадр: у GIF Pillow сам накладывает кадр на предыдущие (и для пропущенных тоже)
         yield t, t + d, lambda: _shrink(flatten(img.convert("RGBA"), keep_alpha))
         t += d
+        i += 1
 
 
-def _read_video(data: bytes, keep_alpha: bool) -> Media:
+def _video_frame(frame, keep_alpha: bool) -> Image.Image:
+    """Кадр видео, уменьшенный до FRAME_SIDE ещё в FFmpeg: кадр 4K не превращается в огромную картинку Pillow."""
+    scale = min(1.0, FRAME_SIDE / max(frame.width, frame.height, 1))
+    size = {"width": max(1, round(frame.width * scale)), "height": max(1, round(frame.height * scale))}
+    return flatten(frame.to_image(**size) if scale < 1 else frame.to_image(), keep_alpha)
+
+
+def _read_video(source: bytes | Path, keep_alpha: bool) -> Media:
     import av  # импорт здесь: библиотека тяжёлая, а для картинок не нужна
 
     def frames(container) -> Iterator[SourceFrame]:
@@ -75,10 +123,10 @@ def _read_video(data: bytes, keep_alpha: bool) -> Media:
             # время кадра от начала видео; без меток времени — по номеру кадра и частоте
             t = frame.time * 1000 if frame.time is not None else i * step
             first = t if first is None else first
-            yield t - first, t - first + step, lambda: _shrink(flatten(frame.to_image(), keep_alpha))
+            yield t - first, t - first + step, lambda: _video_frame(frame, keep_alpha)
 
     try:
-        with av.open(io.BytesIO(data)) as container:
+        with av.open(io.BytesIO(source) if isinstance(source, bytes) else str(source)) as container:
             return _sample(frames(container), "видео")
     except (av.FFmpegError, IndexError) as e:
         raise ValueError("Это не картинка и не видео") from e

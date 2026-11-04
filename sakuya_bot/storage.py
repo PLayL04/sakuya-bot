@@ -77,11 +77,18 @@ def remove_unused_images(in_use: set[str]) -> list[str]:
     unused = [f for f in uploads if f not in in_use]
     if not unused:
         return []
+    removed = []
     for file in unused:
-        (IMG_DIR / file).unlink(missing_ok=True)
+        try:
+            (IMG_DIR / file).unlink(missing_ok=True)
+        except OSError as e:
+            # на Windows файл бывает занят (антивирус, открыт в просмотрщике): остаётся в списке, удалится в другой раз
+            log.warning("Не удалось удалить ненужную картинку %s, попробую позже: %s", file, e)
+            continue
+        removed.append(file)
         log.info("Удалена картинка %s: она больше не используется ни в одном правиле или расписании", file)
-    save_json(UPLOADS_FILE, [f for f in uploads if f in in_use])
-    return unused
+    save_json(UPLOADS_FILE, [f for f in uploads if f not in removed])
+    return removed
 
 
 async def receive_image(interaction: discord.Interaction, image: discord.Attachment | None, file: str | None) -> str | None:

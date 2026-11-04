@@ -1,5 +1,7 @@
 """Команды /settings (settings/cog.py) и проверка доступа (checks.py)."""
 
+from unittest import mock
+
 import pytest
 
 from sakuya_bot.checks import is_admin
@@ -89,3 +91,18 @@ async def test_file_edited_on_disk_is_reported(cog, log_channel):
 def test_is_admin(settings, user, roles, allowed):
     settings(admin_roles=frozenset(roles))
     assert is_admin(user) is allowed
+
+
+async def test_watch_file_survives_errors(cog, monkeypatch):
+    monkeypatch.setattr(STORE, "reload_if_changed", lambda: 1 / 0)
+    await SettingsCog.watch_file.coro(cog)  # tasks.loop остановился бы навсегда, если бы ошибка вылетела наружу
+
+
+def test_busy_file_is_read_later(cog, monkeypatch):
+    STORE.path.write_text(render(Settings(fun_cooldown=7)), encoding="utf-8")
+    STORE._mtime = None
+    real = STORE.read_text
+    monkeypatch.setattr(STORE, "read_text", mock.Mock(side_effect=PermissionError("занят")))
+    assert not STORE.reload_if_changed()
+    monkeypatch.setattr(STORE, "read_text", real)
+    assert STORE.reload_if_changed() and current().fun_cooldown == 7

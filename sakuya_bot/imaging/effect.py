@@ -31,9 +31,10 @@ class EffectResult:
     info: str  # для логов: что обработали
 
 
-def run_effect(effect: ImageEffect, data: bytes, size_limit: int) -> EffectResult:
-    """Картинка -> картинка; GIF, анимированный PNG/WebP или видео -> GIF не больше size_limit байт."""
-    media = read_media(data, effect.keep_alpha)
+def run_effect(effect: ImageEffect, source: bytes | Path, size_limit: int) -> EffectResult:
+    """Картинка -> картинка; GIF, анимированный PNG/WebP или видео -> GIF не больше size_limit байт.
+    source — байты или скачанный файл; перед эффектом исходник уменьшается (media.read_media)."""
+    media = read_media(source, effect.keep_alpha)
     if not media.animated:
         frame, template = media.frames[0], _template(effect)
         if template is None:
