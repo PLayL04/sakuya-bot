@@ -42,6 +42,7 @@ def test_ids_as_strings_and_numbers():
     ('[access]\nadmin_roles = ["роль модератора"]', "не похоже на ID"),
     ('[schedule]\ntimezone = "Moscow"', "часовой пояс"),
     ('[reactions]\nping_emoji = ""', "пустым"),
+    ("[reactions]\nyes_no_chance = 150", "процентов от 0 до 100"),
     ('[logs]\nchannel = "логи"', "не похоже на ID канала"),
     ("[fun\ncooldown = 5", "TOML"),
 ])
@@ -74,7 +75,7 @@ cooldown = 30
 
 def test_complete_adds_new_keys_and_keeps_comments():
     text, added = complete(OLD_FILE)
-    assert {f.key for f in added} == {"channels", "image_cooldown", "ping_emoji", "timezone", "channel"}
+    assert {f.key for f in added} == {"channels", "image_cooldown", "ping_emoji", "yes_no_chance", "timezone", "channel"}
     assert "# мой комментарий: роль модераторов" in text and "admin_roles = [111]  # модеры" in text
     assert parse(text) == Settings(admin_roles=frozenset({111}), fun_cooldown=30)
     assert complete(text) == (text, [])  # второй раз дописывать нечего
@@ -91,6 +92,8 @@ def test_describe_and_changes():
     by_key = {f.key: f for f in FIELDS}
     assert describe_value(by_key["cooldown"], 0) == "без ограничения"
     assert describe_value(by_key["channel"], 0) == "не задан"
+    assert describe_value(by_key["yes_no_chance"], 0) == "выключено"
+    assert describe_value(by_key["yes_no_chance"], 10) == "10 %"
     assert describe_value(by_key["channels"], frozenset()) == "во всех каналах"
     assert describe_value(by_key["admin_roles"], frozenset({1}), lambda kind, i: f"<@&{i}>") == "<@&1>"
 

@@ -17,6 +17,7 @@ from .museum.cog import MuseumCog
 from .quotes.cog import QuoteCog
 from .reactions.cog import ReactionCog
 from .replies import respond
+from .rhymes.cog import RhymeCog
 from .schedules.cog import ScheduleCog
 from .settings import current
 from .settings.cog import SettingsCog
@@ -44,6 +45,7 @@ class SakuyaBot(commands.Bot):
         await self.add_cog(DistortCog(self))
         await self.add_cog(MuseumCog(self))
         await self.add_cog(QuoteCog(self))
+        await self.add_cog(RhymeCog(self))
         # после команд с картинками: меню берёт их кулдауны, а /help — их алиасы
         await self.add_cog(MenuCog(self))
         await self.add_cog(HelpCog(self), guild=GUILD)

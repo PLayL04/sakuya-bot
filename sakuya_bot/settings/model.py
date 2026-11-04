@@ -13,6 +13,7 @@ class Settings:
     fun_cooldown: int = 15
     image_reply_cooldown: int = 60
     ping_emoji: str = "MadelineAlo"
+    yes_no_chance: int = 10  # процентов; 0 — выключено
     timezone: str = "Europe/Moscow"
     log_channel: int = 0  # 0 — канал логов не задан
 
@@ -26,10 +27,10 @@ class Field:
     section: str
     key: str
     attr: str  # поле Settings
-    kind: str  # roles | channels | channel | seconds | name | timezone
+    kind: str  # roles | channels | channel | seconds | percent | name | timezone
     title: str  # для /settings show и списка изменений
     comment: str  # комментарий над строкой в файле
-    max: int = 0  # для seconds
+    max: int = 0  # для seconds и percent
 
 
 FIELDS = [
@@ -47,6 +48,9 @@ FIELDS = [
           max=86400),
     Field("reactions", "ping_emoji", "ping_emoji", "name", "Эмодзи на пинг бота",
           "Эмодзи сервера (имя без двоеточий), которым бот отвечает на упоминание. Если такого нет — ставится 💩."),
+    Field("reactions", "yes_no_chance", "yes_no_chance", "percent", "Шанс ответа гифкой на «да» и «нет»",
+          "С каким шансом (в процентах) бот отвечает гифкой на короткое сообщение, которое кончается на «да» или «нет».\n"
+          "100 — всегда, 0 — выключено (сообщения даже не проверяются).", max=100),
     Field("schedule", "timezone", "timezone", "timezone", "Часовой пояс расписаний",
           "Часовой пояс, в котором указывается время в /schedule (и время в логах бота).\n"
           "Например \"Europe/Moscow\", \"Europe/Kaliningrad\", \"Asia/Yekaterinburg\", \"Asia/Novosibirsk\".\n"
@@ -126,9 +130,10 @@ def _convert(field: Field, value):
         if isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).strip().isdigit():
             raise ValueError(f"«{value}» не похоже на ID канала — нужно число из 17–20 цифр, или 0, чтобы выключить")
         return int(str(value).strip())
-    if field.kind == "seconds":
+    if field.kind in ("seconds", "percent"):
         if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= field.max:
-            raise ValueError(f"нужно целое число секунд от 0 до {field.max}, а указано {value!r}")
+            what = "секунд" if field.kind == "seconds" else "процентов"
+            raise ValueError(f"нужно целое число {what} от 0 до {field.max}, а указано {value!r}")
         return value
     if not isinstance(value, str):
         raise ValueError(f"нужен текст в кавычках, а указано {value!r}")
@@ -208,6 +213,8 @@ def describe_value(field: Field, value, mention: Callable[[str, int], str] = lam
         return mention("channels", value) if value else "не задан"
     if field.kind == "seconds":
         return f"{value} с" if value else "без ограничения"
+    if field.kind == "percent":
+        return f"{value} %" if value else "выключено"
     return str(value)
 
 
