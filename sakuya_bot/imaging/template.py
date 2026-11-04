@@ -111,12 +111,18 @@ def read_settings(path: Path) -> dict:
     return json.loads(settings_file.read_text(encoding="utf-8")) if settings_file.exists() else {}
 
 
-@lru_cache(maxsize=16)
 def load_template(path: Path, max_side: int | None = None) -> Template:
     """Загружает шаблон и его настройки, находит вырез. Результат кешируется для каждого файла.
     max_side — уменьшить шаблон так, чтобы большая сторона была не больше этого числа (для анимаций)."""
+    # аргументы всегда передаются в кеш одинаково: иначе load_template(p) и load_template(p, None) — разные записи,
+    # шаблон загружается дважды, а кеши эффектов (они привязаны к объекту шаблона) считаются заново
+    return _load_template(Path(path), max_side or None)
+
+
+@lru_cache(maxsize=16)
+def _load_template(path: Path, max_side: int | None) -> Template:
     if max_side:
-        full = load_template(path)
+        full = _load_template(path, None)
         factor = max_side / max(full.mask.shape)
         return full.resized(factor) if factor < 1 else full
     settings = read_settings(path)

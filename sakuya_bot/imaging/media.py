@@ -1,6 +1,7 @@
 """Анимации: кадры из GIF / анимированных PNG и WebP / видео, и сборка результата в GIF под лимит размера файла."""
 
 import io
+from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
 
 from PIL import Image, ImageOps, UnidentifiedImageError
@@ -14,12 +15,18 @@ ANIMATION_SIDE = 480  # большая сторона результата-ан�
 MIN_SIDE = 160  # меньше этого анимацию не уменьшаем — лучше сократить кадры
 
 
+MAX_SOURCE_FRAMES = 3000  # сколько кадров исходника просматриваем максимум (кадры по 1 мс, видео без меток времени)
+
+# кадр исходника: (начало, мс; конец, мс; функция, которая декодирует и готовит кадр — вызывается, только если он нужен)
+SourceFrame = tuple[float, float, Callable[[], Image.Image]]
+
+
 @dataclass
 class Media:
     frames: list[Image.Image]  # кадры (RGB или RGBA, см. keep_alpha)
     durations: list[int]  # длительность каждого кадра, мс
     source: str  # "картинка", "GIF", "видео" — для логов
-    total_ms: int  # длительность исходника, мс (может быть больше взятого)
+    truncated: bool = False  # исходник длиннее взятого: взято только начало
 
     @property
     def animated(self) -> bool:
@@ -37,43 +44,44 @@ def read_media(data: bytes, keep_alpha: bool) -> Media:
     if img.width * img.height > MAX_PIXELS:
         raise ValueError("Картинка слишком большая")
     try:
-        n = getattr(img, "n_frames", 1)
-        if n == 1:
+        if not getattr(img, "is_animated", False):
             img.load()
             frame = flatten(ImageOps.exif_transpose(img), keep_alpha)
-            return Media([frame], [0], "картинка", 0)
-        timed = []
-        for i in range(n):
-            img.seek(i)
-            # convert() даёт полный кадр: у GIF Pillow сам накладывает кадр на предыдущие
-            timed.append((_shrink(flatten(img.convert("RGBA"), keep_alpha)), img.info.get("duration") or 100))
+            return Media([frame], [0], "картинка")
+        return _sample(_animation_frames(img, keep_alpha), img.format or "анимация")
     except (OSError, EOFError) as e:
         raise ValueError("Не удалось прочитать анимацию") from e
-    return _resample(timed, img.format or "анимация")
+
+
+def _animation_frames(img: Image.Image, keep_alpha: bool) -> Iterator[SourceFrame]:
+    t = 0
+    for i in range(img.n_frames):
+        img.seek(i)
+        d = img.info.get("duration") or 100
+        # convert() даёт полный кадр: у GIF Pillow сам накладывает кадр на предыдущие (и для пропущенных тоже)
+        yield t, t + d, lambda: _shrink(flatten(img.convert("RGBA"), keep_alpha))
+        t += d
 
 
 def _read_video(data: bytes, keep_alpha: bool) -> Media:
     import av  # импорт здесь: библиотека тяжёлая, а для картинок не нужна
 
-    timed = []
+    def frames(container) -> Iterator[SourceFrame]:
+        stream = container.streams.video[0]
+        stream.thread_type = "AUTO"
+        step = 1000 / float(stream.average_rate or 25)
+        first = None
+        for i, frame in enumerate(container.decode(stream)):
+            # время кадра от начала видео; без меток времени — по номеру кадра и частоте
+            t = frame.time * 1000 if frame.time is not None else i * step
+            first = t if first is None else first
+            yield t - first, t - first + step, lambda: _shrink(flatten(frame.to_image(), keep_alpha))
+
     try:
         with av.open(io.BytesIO(data)) as container:
-            stream = container.streams.video[0]
-            stream.thread_type = "AUTO"
-            prev = None
-            for frame in container.decode(stream):
-                t = float(frame.time or 0)
-                if prev is not None:
-                    timed[-1] = (timed[-1][0], round((t - prev) * 1000))
-                if t >= MAX_SECONDS:
-                    break
-                timed.append((_shrink(flatten(frame.to_image(), keep_alpha)), round(1000 / float(stream.average_rate or 25))))
-                prev = t
+            return _sample(frames(container), "видео")
     except (av.FFmpegError, IndexError) as e:
         raise ValueError("Это не картинка и не видео") from e
-    if not timed:
-        raise ValueError("В видео нет кадров")
-    return _resample(timed, "видео")
 
 
 def _shrink(img: Image.Image) -> Image.Image:
@@ -83,21 +91,25 @@ def _shrink(img: Image.Image) -> Image.Image:
     return img
 
 
-def _resample(timed: list[tuple[Image.Image, int]], source: str) -> Media:
-    """Обрезает до MAX_SECONDS и прореживает до MAX_FPS: кадр берётся, только если с прошлого прошло >= 1/MAX_FPS с."""
-    total = sum(d for _, d in timed)
-    frames, durations = [], []
-    t, next_t = 0, 0.0
-    for frame, d in timed:
-        if t >= MAX_SECONDS * 1000:
+def _sample(source_frames: Iterable[SourceFrame], source: str) -> Media:
+    """Берёт первые MAX_SECONDS и не чаще MAX_FPS: кадр берётся, только если с прошлого взятого прошло >= 1/MAX_FPS с.
+    Пропущенные кадры не декодируются в картинку, а их время добавляется к последнему взятому.
+    Дальше MAX_SECONDS исходник не читается — длинная гифка или видео не занимают память и время целиком."""
+    frames, starts = [], []
+    end, next_t, truncated = 0.0, 0.0, False
+    for i, (start, stop, load) in enumerate(source_frames):
+        if start >= MAX_SECONDS * 1000 or i >= MAX_SOURCE_FRAMES:
+            truncated = True
             break
-        if t >= next_t:
-            frames.append(frame)
-            durations.append(0)
-            next_t = t + 1000 / MAX_FPS
-        durations[-1] += d  # пропущенные кадры добавляют время к последнему взятому
-        t += d
-    return Media(frames, [max(20, d) for d in durations], source, total)
+        if start >= next_t - 1:  # допуск 1 мс: у видео 60 fps каждый 4-й кадр приходится ровно на 1/15 с, но в дробях
+            frames.append(load())
+            starts.append(start)
+            next_t = start + 1000 / MAX_FPS
+        end = max(end, stop)
+    if not frames:
+        raise ValueError("В анимации нет кадров")
+    durations = [max(20, round(b - a)) for a, b in zip(starts, starts[1:] + [end])]
+    return Media(frames, durations, source, truncated)
 
 
 def shared_palette(frames: list[Image.Image]) -> Image.Image:

@@ -45,9 +45,8 @@ def run_effect(effect: ImageEffect, data: bytes, size_limit: int) -> EffectResul
     source = media.frames if template is not None else [_fit(f, ANIMATION_SIDE) for f in media.frames]
     frames = [Image.fromarray(np.clip(effect.render(f, template), 0, 255).astype(np.uint8)) for f in source]
     gif = encode_gif(frames, media.durations, size_limit)
-    taken = sum(media.durations)
-    cut = f" из {media.total_ms / 1000:.1f} с" if media.total_ms > taken + 50 else ""
-    info = f"{media.source}: {len(frames)} кадров, {taken / 1000:.1f} с{cut}, {len(gif) // 1024} КБ"
+    cut = " (взято начало)" if media.truncated else ""
+    info = f"{media.source}: {len(frames)} кадров, {sum(media.durations) / 1000:.1f} с{cut}, {len(gif) // 1024} КБ"
     return EffectResult(gif, Path(effect.still_name).stem + ".gif", info)
 
 

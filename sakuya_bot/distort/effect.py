@@ -37,10 +37,11 @@ def source_coords(width: int, height: int, a: float) -> tuple[np.ndarray, np.nda
     return cx + nx * k * rx, cy + ny * k * ry
 
 
-@lru_cache(maxsize=8)
+@lru_cache(maxsize=2)
 def sampling(width: int, height: int, a: float) -> tuple[np.ndarray, np.ndarray]:
     """Готовая билинейная выборка: для каждого пикселя результата — индексы четырёх соседей в плоском массиве
-    картинки и их веса. Зависит только от размера, поэтому для всех кадров анимации считается один раз."""
+    картинки и их веса. Зависит только от размера, поэтому для всех кадров анимации считается один раз.
+    Кеш маленький: у картинок размеры почти всегда разные, а одна запись для 1280 px занимает ~40 МБ."""
     xs, ys = source_coords(width, height, a)
     xs, ys = np.clip(xs, 0, width - 1.001), np.clip(ys, 0, height - 1.001)
     x0, y0 = xs.astype(np.int32), ys.astype(np.int32)
@@ -55,7 +56,11 @@ def radial_distort(img: Image.Image, a: float) -> np.ndarray:
     """Картинка (RGB) -> RGB 0..255 того же размера. a < 1 — выпуклость (explode), a > 1 — вдавливание (implode)."""
     index, weights = sampling(img.width, img.height, float(a))
     src = np.asarray(img.convert("RGB"), dtype=np.float32).reshape(-1, 3)
-    return np.einsum("nk,nkc->nc", weights, src[index]).reshape(img.height, img.width, 3)
+    # по одному соседу за раз: так не создаётся промежуточный массив всех четырёх соседей (в 4 раза больше картинки)
+    out = weights[:, :1] * src[index[:, 0]]
+    for k in range(1, 4):
+        out += weights[:, k:k + 1] * src[index[:, k]]
+    return out.reshape(img.height, img.width, 3)
 
 
 def explode(img: Image.Image, _template=None) -> np.ndarray:

@@ -1,8 +1,10 @@
 """Команды /schedule и фоновый цикл, который отправляет картинки по расписанию."""
 
+import asyncio
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 
+import aiohttp
 import discord
 from discord import app_commands
 from discord.ext import commands, tasks
@@ -11,9 +13,12 @@ from ..checks import AdminOnly
 from ..config import DATA_DIR, IMG_DIR, TZ
 from ..logs import log, who
 from ..storage import is_image, list_images, load_json, save_image, save_json
-from .rules import DATE_RE, TIME_RE, WEEKDAYS, describe_schedule, is_due_today
+from .rules import DATE_RE, TIME_RE, WEEKDAYS, describe_schedule, due_occurrence, last_passed_day, missed_once
 
 SCHEDULES_FILE = DATA_DIR / "schedules.json"
+# сколько после назначенного времени ещё можно отправить (бот перезапускался, сеть, сбой Discord);
+# позже — отправка за этот день пропускается, чтобы «доброе утро» не пришло в обед
+SEND_GRACE = timedelta(minutes=30)
 
 
 @app_commands.guild_only()
@@ -45,23 +50,42 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
         log.info("Расписание %s (%s): отправлена картинка %s в #%s", sched["id"], describe_schedule(sched), sched["image"], channel)
         return True
 
+    async def try_send(self, sched: dict) -> bool | None:
+        """Отправка из цикла: True — отправлено; False — не получится и повтор не поможет (нет канала, прав или файла);
+        None — временная ошибка (сеть, сбой Discord), стоит повторить на следующем круге."""
+        try:
+            return await self.send_schedule(sched)
+        except (discord.Forbidden, discord.NotFound) as e:
+            log.error("Расписание %s: не удалось отправить в канал %s (нет канала или прав у бота): %s",
+                      sched["id"], sched["channel_id"], e)
+            return False
+        except (discord.HTTPException, aiohttp.ClientError, asyncio.TimeoutError, OSError) as e:
+            log.warning("Расписание %s: временная ошибка отправки в канал %s, повторю: %s", sched["id"], sched["channel_id"], e)
+            return None
+        except Exception:
+            # любая другая ошибка не должна останавливать цикл: иначе перестанут отправляться все расписания
+            log.exception("Расписание %s: неожиданная ошибка отправки", sched["id"])
+            return False
+
     @tasks.loop(seconds=20)
     async def scheduler(self):
         now = datetime.now(TZ)
-        today = now.date().isoformat()
-        hhmm = now.strftime("%H:%M")
         changed = False
         for sched in list(self.schedules):
-            # last_sent защищает от двойной отправки в течение одной минуты
-            if sched["time"] == hhmm and sched.get("last_sent") != today and is_due_today(sched, now):
-                try:
-                    await self.send_schedule(sched)
-                except discord.DiscordException as e:
-                    log.error("Расписание %s: ошибка отправки в канал %s: %s", sched["id"], sched["channel_id"], e)
-                sched["last_sent"] = today
-                if sched.get("kind") == "once":
+            # last_sent — день, за который расписание уже отправлено (или отправить не получилось): защита от повторов
+            if day := due_occurrence(sched, now, SEND_GRACE):
+                sent = await self.try_send(sched)
+                if sent is None:
+                    continue  # временная ошибка: повторим через 20 секунд, пока не выйдет SEND_GRACE
+                sched["last_sent"] = day
+                changed = True
+                if sent and sched.get("kind") == "once":
                     self.schedules.remove(sched)
                     log.info("Расписание %s было одноразовым и удалено", sched["id"])
+            elif missed_once(sched, now, SEND_GRACE):
+                # бот был выключен, или все попытки не удались. Расписание не удаляем молча: оно остаётся в /schedule list
+                log.error("Расписание %s (%s) пропущено: в нужное время отправить не удалось", sched["id"], describe_schedule(sched))
+                sched["last_sent"] = sched["date"]
                 changed = True
         if changed:
             self.save()
@@ -121,9 +145,9 @@ class ScheduleCog(AdminOnly, commands.GroupCog, group_name="schedule",
             "channel_id": channel.id,
             "image": file,
             "message": message,
-            # не отправлять сегодня, если время уже прошло
-            "last_sent": now.date().isoformat() if now.strftime("%H:%M") > time else None,
         }
+        # не отправлять задним числом: сегодня, если время уже прошло, и вчера (цикл догоняет пропуски до SEND_GRACE)
+        sched["last_sent"] = last_passed_day(sched, now)
         self.schedules.append(sched)
         self.save()
         when = describe_schedule(sched)

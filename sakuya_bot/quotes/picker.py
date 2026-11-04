@@ -203,17 +203,31 @@ def escape(text: str) -> str:
 def format_quote(quote: Quote) -> str:
     """Цитата блоком «>» (каждый абзац — отдельной строкой) и подпись курсивом мелким шрифтом под ней.
 
-    Если сообщение не влезает в 2000 символов (из-за экранирования), с конца убираются целые предложения.
+    Если сообщение не влезает в 2000 символов (из-за экранирования), с конца убираются целые предложения,
+    а если осталось одно — слова с его конца (с «…»): обрезка готового сообщения сломала бы разметку посреди «\\*» или «**».
     """
     paragraphs = [list(p) for p in quote.paragraphs]
+    source = escape(quote.source[:150])  # подпись из первой строки файла может оказаться любой длины
     while True:
         lines = [f"> {escape(' '.join(p))}" for p in paragraphs]
         # одно короткое предложение — жирным: так оно читается как афоризм
         if len(paragraphs) == 1 and len(paragraphs[0]) == 1 and len(paragraphs[0][0]) <= 200:
             lines = [f"> **{escape(paragraphs[0][0])}**"]
-        message = "\n".join(lines) + f"\n-# — *{escape(quote.source)}*"
-        if len(message) <= MESSAGE_LIMIT or sum(map(len, paragraphs)) <= 1:
-            return message[:MESSAGE_LIMIT]
-        paragraphs[-1].pop()
-        if not paragraphs[-1]:
-            paragraphs.pop()
+        message = "\n".join(lines) + f"\n-# — *{source}*"
+        if len(message) <= MESSAGE_LIMIT:
+            return message
+        if sum(map(len, paragraphs)) > 1:
+            paragraphs[-1].pop()
+            if not paragraphs[-1]:
+                paragraphs.pop()
+            continue
+        words = paragraphs[0][0].rstrip("…").split(" ")
+        if len(words) <= 1:
+            return message[:MESSAGE_LIMIT]  # одно огромное «слово» без пробелов — тут уже не до разметки
+        # убираем примерно столько слов, сколько лишних символов, но не меньше одного
+        excess = len(message) - MESSAGE_LIMIT
+        cut, removed = len(words), 0
+        while cut > 1 and (removed < excess or cut == len(words)):
+            cut -= 1
+            removed += len(escape(words[cut])) + 1
+        paragraphs[0][0] = " ".join(words[:cut]) + "…"

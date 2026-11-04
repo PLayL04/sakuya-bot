@@ -1,5 +1,7 @@
 """Латте-арт: вставляет картинку в шаблон чашки и стилизует её под рисунок пенкой на эспрессо."""
 
+from functools import lru_cache
+
 import numpy as np
 from PIL import Image, ImageFilter, ImageOps
 
@@ -29,17 +31,40 @@ def latte_colors(src: Image.Image, size: tuple[int, int]) -> np.ndarray:
     t = (s(t) - s(0)) / (s(1) - s(0))
 
     # зернистая текстура пены
-    noise = np.random.default_rng(42).normal(0.5, 0.5, (h, w))
-    t = np.clip(t + (blur(noise, 1.2) - 0.5) * 0.12 * t, 0, 1)
+    t = np.clip(t + grain((w, h)) * 0.12 * t, 0, 1)
 
     t = t[..., None]
     rgb = np.where(t < 0.5, ESPRESSO + (CREMA - ESPRESSO) * (t * 2), CREMA + (FOAM - CREMA) * (t * 2 - 1))
 
     # к стенкам чашки кофе темнее
+    rgb *= vignette((w, h))
+    return rgb
+
+
+# всё, что зависит только от размера или шаблона, считается один раз (для анимации — один раз на все кадры)
+
+@lru_cache(maxsize=4)
+def grain(size: tuple[int, int]) -> np.ndarray:
+    """Зернистость пены: мягкий шум около нуля (-0.5..0.5)."""
+    w, h = size
+    noise = np.random.default_rng(42).normal(0.5, 0.5, (h, w))
+    return blur(noise, 1.2) - 0.5
+
+
+@lru_cache(maxsize=4)
+def vignette(size: tuple[int, int]) -> np.ndarray:
+    """Множитель яркости: к стенкам чашки кофе темнее."""
+    w, h = size
     yy, xx = np.mgrid[0:h, 0:w]
     d = np.hypot((xx - w / 2) / (w / 2), (yy - h / 2) / (h / 2))
-    rgb *= (1 - 0.3 * np.clip((d - 0.55) / 0.45, 0, 1) ** 2)[..., None]
-    return rgb
+    return (1 - 0.3 * np.clip((d - 0.55) / 0.45, 0, 1) ** 2)[..., None]
+
+
+@lru_cache(maxsize=4)
+def wall_shadow(template: Template) -> np.ndarray:
+    """Множитель яркости: тень от стенок чашки на поверхности кофе."""
+    shadow = blur(1 - template.mask, 8 * template.scale) * template.mask
+    return (1 - 0.6 * shadow)[..., None]
 
 
 def render(src: Image.Image, template: Template) -> np.ndarray:
@@ -49,8 +74,7 @@ def render(src: Image.Image, template: Template) -> np.ndarray:
     coffee[y0:y1, x0:x1] = latte_colors(src, (x1 - x0, y1 - y0))
 
     # тень от стенок чашки на поверхности кофе
-    shadow = blur(1 - template.mask, 8 * template.scale) * template.mask
-    coffee *= (1 - 0.6 * shadow)[..., None]
+    coffee *= wall_shadow(template)
 
     # вставка в вырез; если в настройках шаблона включён "shading" — с освещением из шаблона
     return template.composite(coffee)
