@@ -23,7 +23,7 @@ GUILD = discord.Object(id=GUILD_ID)
 ADMIN_ROLE_IDS = parse_ids(os.environ["ADMIN_ROLE_ID"])
 if not ADMIN_ROLE_IDS:
     raise SystemExit("ADMIN_ROLE_ID в .env пустой — укажите хотя бы одну роль")
-# каналы для развлекательных команд (!кофе, !пиво, !explode, !implode) через запятую; пусто — во всех каналах
+# каналы для развлекательных команд (!кофе, !пиво, !explode, !implode, !цитата) через запятую; пусто — во всех каналах
 FUN_CHANNEL_IDS = parse_ids(os.getenv("FUN_CHANNEL_ID", ""))
 TZ = ZoneInfo(os.getenv("TIMEZONE", "Europe/Moscow"))
 
@@ -32,4 +32,6 @@ IMG_DIR = BASE_DIR / "img"
 DATA_DIR = BASE_DIR / "data"
 LOG_DIR = BASE_DIR / "logs"
 TEMPLATE_DIR = BASE_DIR / "template"
+# тексты для !цитата (*.txt); можно указать другую папку в QUOTES_DIR в .env
+QUOTES_DIR = Path(os.getenv("QUOTES_DIR") or BASE_DIR / "quotes")
 IMG_EXTENSIONS = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
