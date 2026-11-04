@@ -3,15 +3,16 @@
 
 import asyncio
 import contextlib
+from urllib.parse import parse_qs, urlparse
 from unittest import mock
 
 import aiohttp
 import pytest
 
 from sakuya_bot.jokes import cache as jokes_cache
-from sakuya_bot.jokes.cache import JokeCache, JokesUnavailable
+from sakuya_bot.jokes.cache import JokeCache, JokesUnavailable, NothingFound, normalize_query, search_url
 from sakuya_bot.jokes.cog import UNAVAILABLE_TEXT, JokeCog
-from sakuya_bot.jokes.parser import MAX_JOKE_CHARS, Joke, format_joke, parse_jokes
+from sakuya_bot.jokes.parser import MAX_JOKE_CHARS, Joke, format_joke, parse_jokes, parse_total
 
 
 def topic(joke_id, text_html):
@@ -80,7 +81,7 @@ async def test_shown_jokes_are_not_repeated():
 async def test_simultaneous_requests_fetch_one_page():
     started = asyncio.Event()
 
-    async def slow_fetch():
+    async def slow_fetch(url):
         started.set()
         await asyncio.sleep(0.05)
         return jokes_page(1, 2, 3)
@@ -142,3 +143,105 @@ async def test_command_when_site_is_down_does_not_spend_cooldown():
 
 async def test_command_aliases(started):
     assert {started.get_command(a).name for a in ("анекдот", "анек", "joke", "шутка")} == {"анекдот"}
+
+
+# ---------- поиск: !анекдот прапорщик гвозди ----------
+
+def search_page(total, *ids):
+    return page(*(topic(i, f"Найденный анекдот {i}.") for i in ids)).replace(
+        "<body>", f"<body><div>в тексте символов не больше; всего найдено: {total}</div>")
+
+
+class SearchSite:
+    """Поиск на сайте: страница по номеру из адреса. urls — какие адреса запрашивали."""
+
+    def __init__(self, pages):
+        self.pages, self.urls = pages, []
+
+    async def __call__(self, url):
+        self.urls.append(url)
+        if "/random/" in url:
+            return jokes_page("r1", "r2")
+        number = int(parse_qs(urlparse(url).query)["page"][0])
+        return self.pages.get(number, search_page(0))
+
+    def page_numbers(self):
+        return [int(parse_qs(urlparse(u).query)["page"][0]) for u in self.urls if "/search/" in u]
+
+
+def test_search_url_like_the_form_on_the_site():
+    params = parse_qs(urlparse(search_url("прапорщик гвозди", 2)).query)
+    assert params["query"] == ["прапорщик гвозди"] and params["page"] == ["2"]
+    assert params["mode"] == ["all"] and params["xcnt"] == ["20"] and params["order"] == ["0"]
+    assert all(params[f"ch[{s}]"] == ["on"] for s in "jsotabcpeE")
+    assert params["max_len"] == ["1800"]  # длинные тексты сайт отсеивает сам
+
+
+def test_normalize_query_and_total():
+    assert normalize_query("  Прапорщик   ГВОЗДИ ") == "прапорщик гвозди"
+    assert normalize_query("   ") == ""
+    assert parse_total(search_page(1000, 1)) == 1000 and parse_total(jokes_page(1)) is None
+
+
+def test_search_highlight_is_dropped():
+    html = page(topic(5, 'Сидит <span style="background-color:#ffff80">прапорщик</span>, забивает гвоздь.'))
+    assert parse_jokes(html)[0].text == "Сидит прапорщик, забивает гвоздь."
+
+
+async def test_search_pages_one_by_one_then_from_the_start(monkeypatch):
+    monkeypatch.setattr(jokes_cache, "PER_PAGE", 2)
+    site = SearchSite({1: search_page(3, 1, 2), 2: search_page(3, 3)})
+    cache = JokeCache(site)
+    ids = [(await cache.next("прапорщик гвозди")).id for _ in range(5)]
+    assert ids == ["1", "2", "3", "1", "2"]  # по порядку, после последней страницы — сначала
+    assert site.page_numbers() == [1, 2, 1]  # новая страница — только когда кончилась предыдущая
+
+
+async def test_page_past_the_end_starts_over(monkeypatch):
+    site = SearchSite({1: search_page(25, 1)})  # «найдено 25», а второй страницы уже нет
+    cache = JokeCache(site)
+    assert [(await cache.next("гвозди")).id for _ in range(2)] == ["1", "1"]
+    assert site.page_numbers() == [1, 2, 1]
+
+
+async def test_each_query_and_random_have_own_stock():
+    site = SearchSite({1: search_page(2, 10, 11)})
+    cache = JokeCache(site)
+    assert (await cache.next("гвозди")).id == "10"
+    assert (await cache.next()).id == "r1"  # случайные — из своего запаса
+    assert (await cache.next(normalize_query(" ГВОЗДИ "))).id == "11"  # тот же запрос — тот же запас
+    assert site.page_numbers() == [1]
+
+
+async def test_nothing_found_is_not_a_site_failure():
+    site = SearchSite({})
+    cache = JokeCache(site)
+    with pytest.raises(NothingFound):
+        await cache.next("зюзюка")
+    assert cache.failed_at is None and (await cache.next()).id == "r1"  # сайт работает — пауза не нужна
+
+
+async def test_command_with_words_searches():
+    site = SearchSite({1: search_page(1, 42)})
+    cog = JokeCog(mock.Mock(), JokeCache(site))
+    ctx = fake_ctx()
+    await JokeCog.joke.callback(cog, ctx, words="  Прапорщик  гвозди")
+    assert ctx.send.call_args.args[0].startswith("Найденный анекдот 42.")
+    assert "query=%D0%BF%D1%80%D0%B0%D0%BF%D0%BE%D1%80%D1%89%D0%B8%D0%BA+%D0%B3%D0%B2%D0%BE%D0%B7%D0%B4%D0%B8" in site.urls[0]
+
+
+async def test_command_nothing_found():
+    cog = JokeCog(mock.Mock(), JokeCache(SearchSite({})))
+    ctx = fake_ctx()
+    await JokeCog.joke.callback(cog, ctx, words="зю_зюка")
+    assert ctx.reply.call_args.args[0] == r"Не нашёл анекдотов по запросу «зю\_зюка»."
+    ctx.command.reset_cooldown.assert_called_once_with(ctx)
+
+
+async def test_single_page_result_is_not_downloaded_again():
+    """«прапорщик гвозди» в режиме all — всего 4 текста: их выдаём по кругу, а не качаем ту же страницу снова."""
+    site = SearchSite({1: search_page(4, 1, 2, 3, 4)})
+    cache = JokeCache(site)
+    ids = [(await cache.next("прапорщик гвозди")).id for _ in range(10)]
+    assert ids == ["1", "2", "3", "4", "1", "2", "3", "4", "1", "2"]
+    assert site.page_numbers() == [1]

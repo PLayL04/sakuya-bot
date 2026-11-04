@@ -1,8 +1,10 @@
 """Разбор страницы случайных анекдотов anekdot.ru и оформление анекдота в сообщение Discord. Без Discord и сети.
 
 На странице несколько анекдотов, каждый — блок <div class="topicbox" data-id="…"> с текстом в <div class="text">,
-строки текста разделены <br>. Блоки без data-id (заголовок страницы) пропускаются."""
+строки текста разделены <br>. Блоки без data-id (заголовок страницы) пропускаются. Так же устроена страница поиска —
+там найденные слова ещё подсвечены <span>, их разбор просто пропускает, оставляя текст."""
 
+import re
 from dataclasses import dataclass
 from html.parser import HTMLParser
 
@@ -67,6 +69,15 @@ def parse_jokes(html: str) -> list[Joke]:
     page.feed(html)
     page.close()
     return [j for j in page.jokes if len(j.text) <= MAX_JOKE_CHARS]
+
+
+TOTAL_RE = re.compile(r"всего найдено:\s*(\d+)")
+
+
+def parse_total(html: str) -> int | None:
+    """Сколько всего нашёл поиск (строка «всего найдено: N» на странице поиска); None — строки нет."""
+    m = TOTAL_RE.search(html)
+    return int(m[1]) if m else None
 
 
 def format_joke(joke: Joke) -> str:
